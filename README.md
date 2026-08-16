@@ -6,6 +6,10 @@ A deliberately small, open-source screen sharing service. Create a room, send a 
 
 Live demo: [miseshare.vercel.app](https://miseshare.vercel.app)
 
+## Related project
+
+If a direct connection fails, use [icecheck](https://github.com/michidk/icecheck) ([live tool](https://icecheck.vercel.app)) to isolate signaling, ICE candidate, data-channel, and media-path problems between two browsers.
+
 WebRTC carries video directly between browsers. An embedded, self-hosted PeerServer only brokers the initial connections.
 
 The Node server and browser application are authored in strict TypeScript. The client build compiles `src/app.ts` to the browser bundle in `public/app.js`.
