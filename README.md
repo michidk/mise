@@ -18,7 +18,7 @@ Open [http://localhost:3000](http://localhost:3000). Screen capture works on `lo
 The repository exports its Node HTTP server for Vercel and keeps the local `npm start` entrypoint. With the authenticated Vercel CLI:
 
 ```bash
-npx vercel --prod
+npx vercel@latest --prod
 ```
 
 Vercel serves files in `public/` from its CDN and runs the embedded PeerServer as a Node Function. WebSocket support on Vercel is currently Public Beta. Existing sockets stay on one Function instance, but a later connection is not guaranteed to reach that same instance. This in-memory PeerServer layout is suitable for a small deployment; reliable horizontal scaling requires an external signaling service or shared cross-instance signaling layer.
