@@ -2,6 +2,10 @@
 
 A deliberately small, open-source screen sharing service. Create a room, send a link, and let any participant take a turn sharing—no accounts, downloads, or room history.
 
+[![screenshare landing page](.playwright/screenshots/screenshare.png)](https://miseshare.vercel.app)
+
+Live demo: [miseshare.vercel.app](https://miseshare.vercel.app)
+
 WebRTC carries video directly between browsers. An embedded, self-hosted PeerServer only brokers the initial connections.
 
 ## Run it locally

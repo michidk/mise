@@ -68,6 +68,7 @@ test('serves the app and public client configuration', async () => {
   const health = await fetch(`${baseUrl}/health`).then((response) => response.json());
   const configResponse = await fetch(`${baseUrl}/config`);
   const config = await configResponse.json();
+  const favicon = await fetch(`${baseUrl}/favicon.svg`);
   const client = await fetch(`${baseUrl}/vendor/peerjs.min.js`);
   const room = await fetch(`${baseUrl}/room/abc12345`);
 
@@ -76,6 +77,8 @@ test('serves the app and public client configuration', async () => {
   assert.deepEqual(config.iceServers, [{ urls: ['stun:main.lohr.dev:3478'] }]);
   assert.equal('demoTurn' in config, false);
   assert.equal(configResponse.headers.get('cache-control'), 'private, no-store');
+  assert.equal(favicon.status, 200);
+  assert.match(favicon.headers.get('content-type'), /image\/svg\+xml/);
   assert.ok(config.iceServers.every(({ urls }) => {
     const candidates = Array.isArray(urls) ? urls : [urls];
     return candidates.every((url) => url.startsWith('stun:'));
