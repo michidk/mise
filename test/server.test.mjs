@@ -102,6 +102,7 @@ test('serves the app and public client configuration', async () => {
   assert.match(page, /id="copy-button"/);
   assert.match(page, /id="copy-code-button"/);
   assert.match(page, /class="room-code-digits"/);
+  assert.match(page, /href="https:\/\/github\.com\/michidk\/mise"/);
 });
 
 test('PeerServer registers IDs and relays negotiation messages', async () => {
