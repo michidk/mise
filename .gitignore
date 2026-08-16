@@ -1,0 +1,9 @@
+node_modules/
+.env
+.env.*
+!.env.example
+.vercel/
+.playwright/
+coverage/
+.DS_Store
+npm-debug.log*

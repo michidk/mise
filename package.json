@@ -1,0 +1,30 @@
+{
+  "name": "screenshare",
+  "version": "0.1.0",
+  "description": "A tiny, open-source, peer-to-peer screen sharing service.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/michidk/mise.git"
+  },
+  "bugs": {
+    "url": "https://github.com/michidk/mise/issues"
+  },
+  "homepage": "https://github.com/michidk/mise#readme",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "node --watch server.mjs",
+    "start": "node server.mjs",
+    "test": "node --test",
+    "typecheck": "node --check server.mjs && node --check public/app.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "peer": "^1.0.2",
+    "peerjs": "^1.5.5"
+  }
+}
