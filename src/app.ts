@@ -1,0 +1,1100 @@
+import type {
+  DataConnection,
+  MediaConnection,
+  Peer as PeerInstance,
+  PeerError,
+  PeerJSOption,
+} from 'peerjs';
+
+declare const Peer: typeof PeerInstance;
+
+type AppElement = HTMLElement & {
+  disabled: boolean;
+  select(): void;
+  selectedOptions: HTMLCollectionOf<HTMLOptionElement>;
+  value: string;
+};
+type Screen = 'landing' | 'host' | 'viewer';
+type ToastTone = 'default' | 'error';
+type ConnectionState = 'waiting' | 'live' | 'ended';
+type ContentHint = '' | 'detail' | 'motion';
+
+interface QualitySettings {
+  width?: number;
+  height?: number;
+  frameRate: number;
+  bitrate: number;
+  label: string;
+  buttonLabel: string;
+  contentHint: ContentHint;
+}
+
+interface ChatMessage {
+  type: 'chat';
+  id: string;
+  sender: 'host' | 'viewer';
+  senderId: string;
+  author: string;
+  text: string;
+  sentAt: number;
+}
+
+interface RoomMessage {
+  type?: string;
+  name?: string;
+  messages?: unknown[];
+  presenterId?: string | null;
+  presenterName?: string;
+  participants?: string[];
+  peerId?: string;
+  sender?: 'host' | 'viewer';
+  senderId?: string;
+  author?: string;
+  text?: string;
+  id?: string;
+  sentAt?: number;
+}
+
+interface ViewerEntry {
+  control: DataConnection;
+  name: string;
+  lastMessageAt: number;
+}
+
+const $ = <ElementType extends Element = AppElement>(selector: string) => {
+  const element = document.querySelector<ElementType>(selector);
+  if (!element) throw new Error(`Missing required element: ${selector}`);
+  return element;
+};
+
+const landing = $('#landing');
+const hostRoom = $('#host-room');
+const viewerRoom = $('#viewer-room');
+const hostVideo = $<HTMLVideoElement>('#local-video');
+const viewerVideo = $<HTMLVideoElement>('#remote-video');
+const toast = $('#toast');
+const qualityMenu = $('#quality-menu');
+const appBaseUrl = new URL(document.baseURI);
+const appBasePath = appBaseUrl.pathname.replace(/\/$/, '');
+
+function appPath(pathname = ''): string {
+  const suffix = pathname.replace(/^\/+/, '');
+  return `${appBasePath}/${suffix}` || '/';
+}
+
+// Keep one settings panel for both creators and viewers.
+document.body.append(qualityMenu);
+
+let peer: PeerInstance | undefined;
+let localStream: MediaStream | undefined;
+let roomId = '';
+let viewerControl: DataConnection | undefined;
+let incomingCall: MediaConnection | undefined;
+let pendingIncomingCall: MediaConnection | undefined;
+let pendingIncomingTimer: ReturnType<typeof setTimeout> | undefined;
+let viewerEnded = false;
+let isRoomCreator = false;
+let activePresenterId: string | undefined;
+let activePresenterName = '';
+let viewerName = '';
+let shareRequestPending = false;
+let maxViewers = 5;
+let guestNumber = 0;
+let rtcConfig: RTCConfiguration = {
+  iceServers: [{ urls: ['stun:main.lohr.dev:3478', 'stun:stun.l.google.com:19302'] }],
+};
+let currentQuality: keyof typeof qualityPresets | 'custom' = 'balanced';
+let presentationAudienceSize = 0;
+
+const hostConnections = new Map<string, ViewerEntry>();
+const outgoingCalls = new Map<string, MediaConnection>();
+const chatHistory: ChatMessage[] = [];
+
+const qualityPresets = {
+  data: { width: 1280, height: 720, frameRate: 15, bitrate: 1_200_000, label: '720p', buttonLabel: 'Data saver', contentHint: 'detail' },
+  balanced: { width: 1920, height: 1080, frameRate: 30, bitrate: 3_500_000, label: '1080p', buttonLabel: 'Balanced', contentHint: '' },
+  sharp: { width: 2560, height: 1440, frameRate: 30, bitrate: 6_000_000, label: '1440p', buttonLabel: 'Text clarity', contentHint: 'detail' },
+  smooth: { width: 1920, height: 1080, frameRate: 60, bitrate: 7_000_000, label: '1080p · 60', buttonLabel: 'Smooth motion', contentHint: 'motion' },
+} satisfies Record<string, QualitySettings>;
+let currentStreamSettings: QualitySettings = { ...qualityPresets.balanced };
+
+const configReady = fetch(appPath('config'))
+  .then((response) => response.json())
+  .then((config: { iceServers: RTCIceServer[]; maxViewers: number }) => {
+    rtcConfig = { iceServers: config.iceServers };
+    maxViewers = config.maxViewers;
+    updateBandwidthEstimate();
+  })
+  .catch(() => {});
+
+function setScreen(screen: Screen) {
+  landing.hidden = screen !== 'landing';
+  hostRoom.hidden = screen !== 'host';
+  viewerRoom.hidden = screen !== 'viewer';
+  document.body.dataset.screen = screen;
+}
+
+let toastTimer: ReturnType<typeof setTimeout> | undefined;
+
+function showToast(message: string, tone: ToastTone = 'default') {
+  toast.textContent = message;
+  toast.dataset.tone = tone;
+  toast.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toast.classList.remove('show'), 3200);
+}
+
+function makeRoomId() {
+  const alphabet = 'abcdefghijkmnpqrstuvwxyz23456789';
+  const bytes = new Uint8Array(8);
+  crypto.getRandomValues(bytes);
+  const code = Array.from(bytes, (byte) => alphabet[byte & 31]).join('');
+  return `${code.slice(0, 4)}-${code.slice(4)}`;
+}
+
+function normalizeRoomCode(value: string): string {
+  const normalized = value.trim().toLowerCase().replace(/\s+/g, '');
+  const match = normalized.match(/(?:room\/)?([a-z0-9-]{6,32})\/?$/);
+  return match?.[1] || '';
+}
+
+function renderRoomCode(code: string) {
+  const container = $('#host-room-code');
+  const groups = code.split('-');
+  container.replaceChildren();
+  container.setAttribute('aria-label', `Room code ${groups.join(' ')}`);
+
+  groups.forEach((group, groupIndex) => {
+    if (groupIndex) {
+      const separator = document.createElement('span');
+      separator.className = 'room-code-separator';
+      separator.textContent = '–';
+      separator.setAttribute('aria-hidden', 'true');
+      container.append(separator);
+    }
+    for (const character of group) {
+      const digit = document.createElement('span');
+      digit.className = 'room-code-digit';
+      digit.textContent = character;
+      digit.setAttribute('aria-hidden', 'true');
+      container.append(digit);
+    }
+  });
+}
+
+function peerOptions(): PeerJSOption {
+  const secure = location.protocol === 'https:';
+  return {
+    host: location.hostname,
+    port: location.port ? Number(location.port) : secure ? 443 : 80,
+    path: appPath('peerjs'),
+    secure,
+    config: rtcConfig,
+    debug: 1,
+  };
+}
+
+function waitForPeerOpen(instance: PeerInstance): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const onOpen = (id: string) => {
+      instance.off('error', onError);
+      resolve(id);
+    };
+    const onError = (error: PeerError<string>) => {
+      instance.off('open', onOpen);
+      reject(error);
+    };
+    instance.once('open', onOpen);
+    instance.once('error', onError);
+  });
+}
+
+async function captureDisplay() {
+  if (!navigator.mediaDevices?.getDisplayMedia) {
+    throw new Error('Screen sharing is not supported in this browser.');
+  }
+  const settings = currentStreamSettings;
+  const video: MediaTrackConstraints = {
+    frameRate: { ideal: settings.frameRate, max: settings.frameRate },
+  };
+  if (settings.width && settings.height) {
+    video.width = { max: settings.width };
+    video.height = { max: settings.height };
+  }
+  const stream = await navigator.mediaDevices.getDisplayMedia({ video, audio: true });
+  const track = stream.getVideoTracks()[0];
+  track.contentHint = settings.contentHint;
+  track.onended = () => stopLocalPresentation();
+  return stream;
+}
+
+async function startSharing() {
+  const button = $('#share-button');
+  button.disabled = true;
+  button.classList.add('loading');
+  try {
+    localStream = await captureDisplay();
+    await configReady;
+
+    isRoomCreator = true;
+    roomId = makeRoomId();
+    renderRoomCode(roomId);
+    $('#share-link').value = `${location.origin}${appPath(`room/${roomId}`)}`;
+    history.replaceState({}, '', appPath(`room/${roomId}`));
+    setScreen('host');
+
+    peer = new Peer(roomId, peerOptions());
+    peer.on('connection', acceptViewer);
+    peer.on('call', receiveScreen);
+    peer.on('error', handleHostPeerError);
+    peer.on('disconnected', reconnectPeer);
+    await waitForPeerOpen(peer);
+
+    setPresenterState(peer.id, 'Host');
+    showStageStream(localStream, true);
+    updateBandwidthEstimate();
+  } catch (error: unknown) {
+    discardLocalStream();
+    peer?.destroy();
+    peer = undefined;
+    isRoomCreator = false;
+    setScreen('landing');
+    history.replaceState({}, '', appPath());
+    if (errorName(error) !== 'NotAllowedError') {
+      const message = peerErrorType(error) === 'unavailable-id'
+        ? 'That room code was taken. Please try again.'
+        : errorMessage(error, 'Could not start sharing.');
+      showToast(message, 'error');
+    }
+  } finally {
+    button.disabled = false;
+    button.classList.remove('loading');
+  }
+}
+
+async function joinRoom(id: string) {
+  roomId = id;
+  isRoomCreator = false;
+  viewerEnded = false;
+  $('#viewer-room-code').textContent = roomId;
+  setScreen('viewer');
+  setViewerState('waiting', 'Joining the room…', 'Connecting to the room creator.');
+  await configReady;
+
+  peer = new Peer(peerOptions());
+  peer.on('call', receiveScreen);
+  peer.on('error', handleViewerPeerError);
+  peer.on('disconnected', reconnectPeer);
+
+  try {
+    await waitForPeerOpen(peer);
+    viewerControl = peer.connect(roomId, {
+      metadata: { role: 'viewer', version: 2 },
+      serialization: 'json',
+      reliable: true,
+    });
+    viewerControl.on('open', () => setViewerConnectionStatus('waiting', 'Connected'));
+    viewerControl.on('data', handleRoomMessage);
+    viewerControl.on('close', () => {
+      if (!peer?.destroyed) endViewer('The room is no longer available.');
+    });
+    viewerControl.on('error', () => endViewer('Could not reach the room creator.'));
+  } catch (error: unknown) {
+    handleViewerPeerError(error);
+  }
+}
+
+function acceptViewer(connection: DataConnection) {
+  if (connection.metadata?.role !== 'viewer') return connection.close();
+  if (hostConnections.size >= maxViewers) {
+    connection.on('open', () => {
+      connection.send({ type: 'room-full' });
+      setTimeout(() => connection.close(), 100);
+    });
+    return;
+  }
+
+  const viewerId = connection.peer;
+  guestNumber += 1;
+  hostConnections.set(viewerId, {
+    control: connection,
+    name: `Guest ${guestNumber}`,
+    lastMessageAt: 0,
+  });
+  updateViewerCount(hostConnections.size);
+
+  connection.on('open', () => {
+    const viewer = hostConnections.get(viewerId);
+    if (!viewer) return;
+    connection.send({ type: 'accepted', name: viewer.name });
+    connection.send({ type: 'chat-history', messages: chatHistory });
+    connection.send(presenterMessage());
+
+    if (activePresenterId === peer?.id && localStream?.active) {
+      callParticipant(viewerId);
+    } else if (activePresenterId && activePresenterId !== peer?.id) {
+      hostConnections.get(activePresenterId)?.control.send({ type: 'participant-joined', peerId: viewerId });
+    }
+  });
+  connection.on('data', (message) => handleViewerData(viewerId, message));
+  connection.on('close', () => removeViewer(viewerId));
+  connection.on('error', () => removeViewer(viewerId));
+}
+
+function handleRoomMessage(value: unknown) {
+  if (!isRoomMessage(value)) return;
+  const message = value;
+  switch (message?.type) {
+    case 'room-full':
+      endViewer('This room has reached its participant limit.');
+      break;
+    case 'room-closed':
+      endViewer('The room was closed by its creator.');
+      break;
+    case 'accepted':
+      viewerName = message.name || 'Guest';
+      setChatEnabled(true);
+      break;
+    case 'chat-history':
+      loadChatHistory(message.messages);
+      break;
+    case 'chat':
+      if (isChatMessage(message)) appendChatMessage(message);
+      break;
+    case 'presenter-changed':
+      setPresenterState(message.presenterId, message.presenterName);
+      break;
+    case 'share-approved':
+      shareRequestPending = false;
+      startCallsToParticipants(message.participants || []);
+      break;
+    case 'share-denied':
+      shareRequestPending = false;
+      discardLocalStream();
+      updateRoomUI();
+      showToast('Someone else started sharing first.', 'error');
+      break;
+    case 'participant-joined':
+      if (isLocalPresenter() && message.peerId) callParticipant(message.peerId);
+      break;
+    case 'participant-left':
+      if (message.peerId) closeOutgoingCall(message.peerId);
+      break;
+  }
+}
+
+function handleViewerData(viewerId: string, value: unknown) {
+  if (!isRoomMessage(value)) return;
+  const message = value;
+  if (message?.type === 'request-share') {
+    approveViewerPresentation(viewerId);
+    return;
+  }
+  if (message?.type === 'stop-presenting') {
+    if (activePresenterId === viewerId) clearPresenter();
+    return;
+  }
+  if (message?.type !== 'chat' || typeof message.text !== 'string') return;
+
+  const viewer = hostConnections.get(viewerId);
+  const text = message.text.trim().slice(0, 500);
+  const now = Date.now();
+  if (!viewer || !text || now - viewer.lastMessageAt < 300) return;
+  viewer.lastMessageAt = now;
+
+  const chatMessage = makeChatMessage({
+    sender: 'viewer',
+    senderId: viewerId,
+    author: viewer.name,
+    text,
+  });
+  rememberChatMessage(chatMessage);
+  appendChatMessage(chatMessage);
+  broadcast(chatMessage);
+}
+
+function isRoomMessage(value: unknown): value is RoomMessage {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function isChatMessage(value: unknown): value is ChatMessage {
+  if (!isRoomMessage(value)) return false;
+  return value.type === 'chat'
+    && typeof value.id === 'string'
+    && (value.sender === 'host' || value.sender === 'viewer')
+    && typeof value.senderId === 'string'
+    && typeof value.author === 'string'
+    && typeof value.text === 'string'
+    && typeof value.sentAt === 'number';
+}
+
+function approveViewerPresentation(viewerId: string) {
+  const viewer = hostConnections.get(viewerId);
+  if (!viewer || activePresenterId || !peer) {
+    viewer?.control.send({ type: 'share-denied' });
+    return;
+  }
+
+  setPresenterState(viewerId, viewer.name);
+  broadcast(presenterMessage());
+  const participants = [peer.id, ...hostConnections.keys()].filter((id) => id !== viewerId);
+  viewer.control.send({ type: 'share-approved', participants });
+}
+
+function presenterMessage(): RoomMessage {
+  return {
+    type: 'presenter-changed',
+    presenterId: activePresenterId || null,
+    presenterName: activePresenterName || '',
+  };
+}
+
+function clearPresenter() {
+  closeIncomingCall();
+  setPresenterState(null, '');
+  broadcast(presenterMessage());
+}
+
+async function startRoomPresentation() {
+  if (activePresenterId || shareRequestPending || localStream) return;
+  shareRequestPending = true;
+  updateRoomUI();
+  try {
+    localStream = await captureDisplay();
+    if (isRoomCreator) {
+      if (activePresenterId) {
+        discardLocalStream();
+        shareRequestPending = false;
+        updateRoomUI();
+        showToast('Someone else started sharing first.', 'error');
+        return;
+      }
+      shareRequestPending = false;
+      if (!peer) throw new Error('The room connection is not ready.');
+      setPresenterState(peer.id, 'Host');
+      broadcast(presenterMessage());
+      showStageStream(localStream, true);
+      startCallsToParticipants([...hostConnections.keys()]);
+    } else if (viewerControl?.open) {
+      viewerControl.send({ type: 'request-share' });
+    } else {
+      throw new Error('The room connection is not ready.');
+    }
+  } catch (error: unknown) {
+    shareRequestPending = false;
+    discardLocalStream();
+    updateRoomUI();
+    if (errorName(error) !== 'NotAllowedError') {
+      showToast(errorMessage(error, 'Could not share this screen.'), 'error');
+    }
+  }
+}
+
+function stopLocalPresentation() {
+  if (!localStream) return;
+  const wasPresenter = isLocalPresenter();
+  closeAllOutgoingCalls();
+  discardLocalStream();
+  presentationAudienceSize = 0;
+
+  if (wasPresenter && isRoomCreator) {
+    clearPresenter();
+  } else if (wasPresenter) {
+    viewerControl?.send({ type: 'stop-presenting' });
+    setPresenterState(null, '');
+  } else {
+    updateRoomUI();
+  }
+  updateBandwidthEstimate();
+}
+
+function discardLocalStream() {
+  if (!localStream) return;
+  for (const track of localStream.getTracks()) {
+    track.onended = null;
+    track.stop();
+  }
+  localStream = undefined;
+}
+
+function isLocalPresenter() {
+  return Boolean(peer?.id && activePresenterId === peer.id);
+}
+
+function setPresenterState(presenterId: string | null | undefined, presenterName = '') {
+  if (incomingCall && incomingCall.peer !== presenterId) closeIncomingCall();
+  activePresenterId = presenterId || undefined;
+  activePresenterName = presenterName || '';
+
+  if (pendingIncomingCall && pendingIncomingCall.peer === activePresenterId) {
+    const call = pendingIncomingCall;
+    clearTimeout(pendingIncomingTimer);
+    pendingIncomingCall = undefined;
+    acceptIncomingScreen(call);
+  } else if (pendingIncomingCall) {
+    clearTimeout(pendingIncomingTimer);
+    pendingIncomingCall.close();
+    pendingIncomingCall = undefined;
+  }
+
+  if (isLocalPresenter() && localStream) {
+    showStageStream(localStream, true);
+  } else {
+    clearStage();
+  }
+  updateRoomUI();
+}
+
+function updateRoomUI() {
+  if (isRoomCreator) {
+    const title = $('#room-title');
+    if (isLocalPresenter()) title.textContent = 'You’re sharing your screen';
+    else if (activePresenterId) title.textContent = `${activePresenterName || 'A guest'} is sharing`;
+    else title.textContent = 'The room is open';
+
+    $('#stop-button').hidden = !isLocalPresenter();
+    $('#host-share-button').hidden = Boolean(activePresenterId || shareRequestPending);
+    $('#host-placeholder-text').textContent = activePresenterId
+      ? `Connecting to ${activePresenterName || 'the presenter'}…`
+      : shareRequestPending ? 'Opening the screen picker…' : 'No one is sharing right now.';
+    return;
+  }
+
+  const shareButton = $('#viewer-share-button');
+  if (isLocalPresenter()) {
+    shareButton.disabled = false;
+    shareButton.textContent = 'Stop sharing';
+    setViewerConnectionStatus('live', 'You are sharing');
+  } else if (!activePresenterId && !shareRequestPending && !viewerEnded) {
+    shareButton.disabled = false;
+    shareButton.textContent = 'Share screen';
+    setViewerConnectionStatus('waiting', 'Room open');
+  } else {
+    shareButton.disabled = true;
+    shareButton.textContent = shareRequestPending ? 'Starting…' : 'Someone is sharing';
+    if (activePresenterId) setViewerConnectionStatus('live', `${activePresenterName || 'A participant'} is sharing`);
+  }
+
+  if (!activePresenterId) {
+    setViewerState('waiting', 'No one is sharing', 'You can share your screen, or wait for another participant.');
+  } else if (!isLocalPresenter() && !viewerVideo.srcObject) {
+    setViewerState('waiting', `${activePresenterName || 'A participant'} is sharing`, 'Connecting to their screen…');
+  }
+}
+
+function showStageStream(stream: MediaStream, isLocal: boolean) {
+  const video = isRoomCreator ? hostVideo : viewerVideo;
+  const shell = video.closest('.video-shell');
+  video.srcObject = stream;
+  video.muted = isLocal;
+  shell?.classList.add('has-video');
+  if (!isRoomCreator) $('#viewer-placeholder').hidden = true;
+  video.play().catch(() => {
+    if (!isRoomCreator) $('#play-button').hidden = false;
+  });
+}
+
+function clearStage() {
+  const video = isRoomCreator ? hostVideo : viewerVideo;
+  video.srcObject = null;
+  video.closest('.video-shell')?.classList.remove('has-video');
+  if (!isRoomCreator) {
+    $('#viewer-placeholder').hidden = false;
+    $('#play-button').hidden = true;
+  }
+}
+
+function receiveScreen(call: MediaConnection) {
+  if (call.metadata?.role !== 'presenter') {
+    call.close();
+    return;
+  }
+  if (!activePresenterId) {
+    pendingIncomingCall?.close();
+    pendingIncomingCall = call;
+    clearTimeout(pendingIncomingTimer);
+    pendingIncomingTimer = setTimeout(() => {
+      if (pendingIncomingCall === call) pendingIncomingCall = undefined;
+      call.close();
+    }, 2500);
+    return;
+  }
+  if (call.peer !== activePresenterId) {
+    call.close();
+    return;
+  }
+  acceptIncomingScreen(call);
+}
+
+function acceptIncomingScreen(call: MediaConnection) {
+  closeIncomingCall();
+  incomingCall = call;
+  call.answer();
+  call.on('stream', (stream) => {
+    if (incomingCall !== call || call.peer !== activePresenterId) return;
+    showStageStream(stream, false);
+    if (!isRoomCreator) setViewerConnectionStatus('live', `${activePresenterName || 'A participant'} is sharing`);
+  });
+  call.on('close', () => handleIncomingCallClosed(call));
+  call.on('error', () => handleIncomingCallClosed(call));
+}
+
+function handleIncomingCallClosed(call: MediaConnection) {
+  if (incomingCall !== call) return;
+  incomingCall = undefined;
+  clearStage();
+  updateRoomUI();
+}
+
+function closeIncomingCall() {
+  clearTimeout(pendingIncomingTimer);
+  pendingIncomingCall?.close();
+  pendingIncomingCall = undefined;
+  if (!incomingCall) return;
+  const call = incomingCall;
+  incomingCall = undefined;
+  call.close();
+}
+
+function startCallsToParticipants(participantIds: string[]) {
+  presentationAudienceSize = 0;
+  for (const participantId of participantIds) callParticipant(participantId);
+  updateBandwidthEstimate();
+}
+
+function callParticipant(participantId: string) {
+  if (!peer || !participantId || participantId === peer.id || !localStream?.active || outgoingCalls.has(participantId)) return;
+  const call = peer.call(participantId, localStream, {
+    metadata: { role: 'presenter', presenterName: isRoomCreator ? 'Host' : viewerName },
+  });
+  outgoingCalls.set(participantId, call);
+  presentationAudienceSize += 1;
+  updateBandwidthEstimate();
+  setTimeout(() => applySenderQuality(call), 0);
+  call.on('close', () => {
+    if (outgoingCalls.get(participantId) !== call) return;
+    outgoingCalls.delete(participantId);
+    presentationAudienceSize = Math.max(0, presentationAudienceSize - 1);
+    updateBandwidthEstimate();
+  });
+  call.on('error', () => closeOutgoingCall(participantId));
+}
+
+function closeOutgoingCall(participantId: string) {
+  const call = outgoingCalls.get(participantId);
+  if (!call) return;
+  outgoingCalls.delete(participantId);
+  call.close();
+  presentationAudienceSize = Math.max(0, presentationAudienceSize - 1);
+  updateBandwidthEstimate();
+}
+
+function closeAllOutgoingCalls() {
+  const calls = [...outgoingCalls.values()];
+  outgoingCalls.clear();
+  for (const call of calls) call.close();
+  presentationAudienceSize = 0;
+  updateBandwidthEstimate();
+}
+
+function removeViewer(viewerId: string) {
+  const entry = hostConnections.get(viewerId);
+  if (!entry) return;
+  hostConnections.delete(viewerId);
+  entry.control.close();
+  closeOutgoingCall(viewerId);
+
+  if (activePresenterId === viewerId) {
+    clearPresenter();
+  } else if (activePresenterId && activePresenterId !== peer?.id) {
+    hostConnections.get(activePresenterId)?.control.send({ type: 'participant-left', peerId: viewerId });
+  }
+  updateViewerCount(hostConnections.size);
+}
+
+function reconnectPeer() {
+  const currentPeer = peer;
+  if (currentPeer && !currentPeer.destroyed) {
+    try { currentPeer.reconnect(); } catch {}
+  }
+}
+
+function handleHostPeerError(error: PeerError<string>) {
+  if (error.type === 'network' || error.type === 'server-error') {
+    showToast('The signaling connection was interrupted.', 'error');
+  }
+}
+
+function handleViewerPeerError(error: unknown) {
+  const type = peerErrorType(error);
+  const unavailable = type === 'peer-unavailable' || type === 'unavailable-id';
+  endViewer(unavailable ? 'This room isn’t available.' : 'Could not connect to this room.');
+}
+
+function peerErrorType(error: unknown): string | undefined {
+  return error && typeof error === 'object' && 'type' in error && typeof error.type === 'string'
+    ? error.type
+    : undefined;
+}
+
+function errorName(error: unknown): string | undefined {
+  return error instanceof Error ? error.name : undefined;
+}
+
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message ? error.message : fallback;
+}
+
+function makeChatMessage({
+  sender,
+  senderId = '',
+  author,
+  text,
+}: Pick<ChatMessage, 'sender' | 'author' | 'text'> & { senderId?: string }): ChatMessage {
+  return {
+    type: 'chat',
+    id: crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`,
+    sender,
+    senderId,
+    author,
+    text,
+    sentAt: Date.now(),
+  };
+}
+
+function rememberChatMessage(message: ChatMessage) {
+  chatHistory.push(message);
+  if (chatHistory.length > 50) chatHistory.shift();
+}
+
+function broadcast(message: RoomMessage | ChatMessage) {
+  for (const { control } of hostConnections.values()) {
+    if (control.open) control.send(message);
+  }
+}
+
+function loadChatHistory(messages: unknown[] | undefined) {
+  if (!Array.isArray(messages)) return;
+  for (const message of messages.slice(-50)) {
+    if (isChatMessage(message)) appendChatMessage(message);
+  }
+}
+
+function appendChatMessage(message: ChatMessage) {
+  const activeRoom = isRoomCreator ? hostRoom : viewerRoom;
+  const container = activeRoom.querySelector('[data-chat-messages]');
+  if (!container || container.querySelector(`[data-message-id="${CSS.escape(message.id)}"]`)) return;
+  container.querySelector('[data-chat-empty]')?.remove();
+
+  const isOwn = isRoomCreator
+    ? message.sender === 'host'
+    : message.sender === 'viewer' && message.senderId === peer?.id;
+  const article = document.createElement('article');
+  article.className = `chat-message${isOwn ? ' own' : ''}`;
+  article.dataset.messageId = message.id;
+
+  const header = document.createElement('header');
+  const author = document.createElement('strong');
+  const time = document.createElement('time');
+  const body = document.createElement('p');
+  author.textContent = isOwn ? 'You' : message.author;
+  time.dateTime = new Date(message.sentAt).toISOString();
+  time.textContent = new Intl.DateTimeFormat([], { hour: 'numeric', minute: '2-digit' }).format(message.sentAt);
+  body.textContent = message.text;
+  header.append(author, time);
+  article.append(header, body);
+  container.append(article);
+
+  while (container.querySelectorAll('.chat-message').length > 50) {
+    container.querySelector('.chat-message')?.remove();
+  }
+  container.scrollTop = container.scrollHeight;
+}
+
+function sendChat(form: HTMLFormElement) {
+  const input = form.querySelector<HTMLInputElement>('[data-chat-input]');
+  if (!input) return;
+  const text = input.value.trim().slice(0, 500);
+  if (!text) return;
+
+  if (isRoomCreator) {
+    const message = makeChatMessage({ sender: 'host', author: 'Host', text });
+    rememberChatMessage(message);
+    appendChatMessage(message);
+    broadcast(message);
+  } else if (viewerControl?.open) {
+    viewerControl.send({ type: 'chat', text });
+  }
+  input.value = '';
+}
+
+function setChatEnabled(enabled: boolean) {
+  const form = viewerRoom.querySelector<HTMLFormElement>('[data-chat-form]');
+  const input = form?.querySelector<HTMLInputElement>('input');
+  const button = form?.querySelector<HTMLButtonElement>('button');
+  if (input) input.disabled = !enabled;
+  if (button) button.disabled = !enabled;
+}
+
+async function applySenderQuality(call: MediaConnection) {
+  const sender = call?.peerConnection?.getSenders().find(({ track }) => track?.kind === 'video');
+  if (!sender) return;
+  const parameters = sender.getParameters();
+  if (!parameters.encodings?.length) parameters.encodings = [{}];
+  parameters.encodings[0].maxBitrate = currentStreamSettings.bitrate;
+  parameters.encodings[0].maxFramerate = currentStreamSettings.frameRate;
+  try { await sender.setParameters(parameters); } catch {}
+}
+
+async function applyStreamSettings(settings: QualitySettings) {
+  if (localStream) {
+    const track = localStream.getVideoTracks()[0];
+    const constraints: MediaTrackConstraints = {
+      frameRate: { ideal: settings.frameRate, max: settings.frameRate },
+    };
+    if (settings.width && settings.height) {
+      constraints.width = { max: settings.width };
+      constraints.height = { max: settings.height };
+    }
+    await track.applyConstraints(constraints);
+    track.contentHint = settings.contentHint;
+  }
+  currentStreamSettings = { ...settings };
+  await Promise.all([...outgoingCalls.values()].map((call) => applySenderQuality(call)));
+  updateBandwidthEstimate();
+}
+
+async function setQuality(name: keyof typeof qualityPresets) {
+  const preset = qualityPresets[name];
+  if (!preset) return;
+  try {
+    await applyStreamSettings(preset);
+    currentQuality = name;
+    setQualityTriggerLabel(preset.buttonLabel);
+    document.querySelectorAll<HTMLElement>('[data-quality]').forEach((button) => {
+      button.classList.toggle('active', button.dataset.quality === name);
+    });
+    syncAdvancedControls(preset);
+    closeQualityMenu();
+    showToast(`${preset.buttonLabel}: ${preset.label} at ${preset.frameRate} fps.`);
+  } catch {
+    showToast('This screen cannot use that quality setting.', 'error');
+  }
+}
+
+function setQualityTriggerLabel(label: string) {
+  $('#quality-label').textContent = label;
+  $('#viewer-quality-label').textContent = label;
+}
+
+function syncAdvancedControls(settings: QualitySettings) {
+  $('#advanced-resolution').value = settings.width && settings.height
+    ? `${settings.width}x${settings.height}`
+    : 'native';
+  $('#advanced-framerate').value = String(settings.frameRate);
+  $('#advanced-content').value = settings.contentHint;
+  $('#advanced-bitrate').value = String(settings.bitrate / 1_000_000);
+  updateBitrateOutput();
+}
+
+function formatMbps(value: number): string {
+  return Number(value).toFixed(1).replace(/\.0$/, '');
+}
+
+function updateBitrateOutput() {
+  const bitrate = Number($('#advanced-bitrate').value);
+  $('#bitrate-output').textContent = `${formatMbps(bitrate)} Mbps`;
+  updateBandwidthEstimate(bitrate * 1_000_000);
+}
+
+function updateBandwidthEstimate(bitrate = currentStreamSettings.bitrate) {
+  const videoPerViewer = bitrate / 1_000_000;
+  const audioPerViewer = localStream?.getAudioTracks().some((track) => track.readyState === 'live') ? 0.128 : 0;
+  const estimatedPerViewer = (videoPerViewer + audioPerViewer) * 1.08;
+  const audience = isLocalPresenter()
+    ? isRoomCreator ? hostConnections.size : presentationAudienceSize
+    : 0;
+  $('#bandwidth-total').textContent = `≈${formatMbps(estimatedPerViewer * audience)} Mbps`;
+  $('#bandwidth-detail').textContent = `${formatMbps(videoPerViewer)} Mbps video ceiling × ${audience} ${audience === 1 ? 'viewer' : 'viewers'}`;
+  $('#bandwidth-capacity').textContent = `Room full: ≈${formatMbps(estimatedPerViewer * maxViewers)} Mbps including typical overhead${audioPerViewer ? ' and audio' : ''}`;
+}
+
+async function applyAdvancedSettings() {
+  const resolution = $('#advanced-resolution').value;
+  const requestedContentHint = $('#advanced-content').value;
+  const contentHint: ContentHint = requestedContentHint === 'detail' || requestedContentHint === 'motion'
+    ? requestedContentHint
+    : '';
+  const [width, height] = resolution === 'native'
+    ? [undefined, undefined]
+    : resolution.split('x').map(Number);
+  const settings = {
+    width,
+    height,
+    frameRate: Number($('#advanced-framerate').value),
+    bitrate: Number($('#advanced-bitrate').value) * 1_000_000,
+    contentHint,
+    label: resolution === 'native' ? 'Source' : $('#advanced-resolution').selectedOptions[0]?.textContent || resolution,
+    buttonLabel: 'Custom',
+  };
+  const button = $('#apply-advanced');
+  button.disabled = true;
+  try {
+    await applyStreamSettings(settings);
+    currentQuality = 'custom';
+    setQualityTriggerLabel('Custom');
+    document.querySelectorAll<HTMLElement>('[data-quality]').forEach((presetButton) => presetButton.classList.remove('active'));
+    closeQualityMenu();
+    showToast(`Custom: ${settings.label} at ${settings.frameRate} fps, ${formatMbps(settings.bitrate / 1_000_000)} Mbps.`);
+  } catch {
+    showToast('This screen cannot use those custom settings.', 'error');
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function closeQualityMenu() {
+  qualityMenu.hidden = true;
+  document.querySelectorAll('[data-quality-trigger]').forEach((button) => button.setAttribute('aria-expanded', 'false'));
+}
+
+function toggleQualityMenu(button: HTMLElement) {
+  const willOpen = qualityMenu.hidden;
+  closeQualityMenu();
+  qualityMenu.hidden = !willOpen;
+  button.setAttribute('aria-expanded', String(willOpen));
+}
+
+function updateViewerCount(count: number) {
+  $('#viewer-count').textContent = `${count} ${count === 1 ? 'viewer' : 'viewers'}`;
+  updateBandwidthEstimate();
+}
+
+function setViewerConnectionStatus(state: ConnectionState, label: string) {
+  $('#viewer-status-dot').className = `status-dot ${state}`;
+  $('#viewer-status').textContent = label;
+}
+
+function setViewerState(state: ConnectionState, message: string, detail: string) {
+  setViewerConnectionStatus(state, state === 'ended' ? 'Offline' : 'Connected');
+  $('#viewer-message').textContent = message;
+  $('#viewer-detail').textContent = detail;
+}
+
+function endViewer(message: string) {
+  if (viewerEnded) return;
+  viewerEnded = true;
+  closeIncomingCall();
+  closeAllOutgoingCalls();
+  discardLocalStream();
+  viewerControl?.close();
+  viewerControl = undefined;
+  peer?.destroy();
+  setChatEnabled(false);
+  clearStage();
+  $('#viewer-placeholder').classList.add('ended');
+  setViewerState('ended', message, 'Return home to create or join another room.');
+  $('#viewer-home').hidden = false;
+  $('#viewer-share-button').disabled = true;
+  $('#viewer-share-button').textContent = 'Room closed';
+}
+
+function closeRoom() {
+  if (!isRoomCreator) return;
+  if (!window.confirm('Close this room for everyone?')) return;
+  broadcast({ type: 'room-closed' });
+  closeIncomingCall();
+  closeAllOutgoingCalls();
+  discardLocalStream();
+  for (const { control } of hostConnections.values()) control.close();
+  hostConnections.clear();
+  peer?.destroy();
+  location.href = appPath();
+}
+
+async function copyShareLink() {
+  const input = $('#share-link');
+  try {
+    await navigator.clipboard.writeText(input.value);
+  } catch {
+    input.select();
+    document.execCommand('copy');
+  }
+  const label = $('#copy-button span');
+  label.textContent = 'Copied';
+  $('#copy-button').classList.add('copied');
+  setTimeout(() => {
+    label.textContent = 'Copy';
+    $('#copy-button').classList.remove('copied');
+  }, 1800);
+}
+
+async function copyRoomCode() {
+  try {
+    await navigator.clipboard.writeText(roomId);
+    showToast('Room code copied.');
+  } catch {
+    const input = $('#share-link');
+    const previous = input.value;
+    input.value = roomId;
+    input.select();
+    document.execCommand('copy');
+    input.value = previous;
+    showToast('Room code copied.');
+  }
+}
+
+$('#share-button').addEventListener('click', startSharing);
+$('#stop-button').addEventListener('click', stopLocalPresentation);
+$('#host-share-button').addEventListener('click', startRoomPresentation);
+$('#close-room-button').addEventListener('click', closeRoom);
+$('#viewer-share-button').addEventListener('click', () => {
+  if (isLocalPresenter()) stopLocalPresentation();
+  else startRoomPresentation();
+});
+$('#copy-button').addEventListener('click', copyShareLink);
+$('#copy-code-button').addEventListener('click', copyRoomCode);
+$('#viewer-home').addEventListener('click', () => { location.href = appPath(); });
+$('#play-button').addEventListener('click', () => {
+  viewerVideo.play();
+  $('#play-button').hidden = true;
+});
+document.querySelectorAll<HTMLFormElement>('[data-chat-form]').forEach((form) => {
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    sendChat(form);
+  });
+});
+document.querySelectorAll<HTMLElement>('[data-quality-trigger]').forEach((button) => {
+  button.addEventListener('click', () => toggleQualityMenu(button));
+});
+document.querySelectorAll<HTMLElement>('[data-quality]').forEach((button) => {
+  button.addEventListener('click', () => {
+    const quality = button.dataset.quality;
+    if (quality && quality in qualityPresets) setQuality(quality as keyof typeof qualityPresets);
+  });
+});
+$('#advanced-toggle').addEventListener('click', () => {
+  const panel = $('#advanced-panel');
+  panel.hidden = !panel.hidden;
+  $('#advanced-toggle').setAttribute('aria-expanded', String(!panel.hidden));
+});
+$('#advanced-bitrate').addEventListener('input', updateBitrateOutput);
+$('#apply-advanced').addEventListener('click', applyAdvancedSettings);
+document.addEventListener('click', (event) => {
+  const target = event.target instanceof Element ? event.target : null;
+  if (!target?.closest('[data-quality-trigger]') && !target?.closest('#quality-menu')) closeQualityMenu();
+});
+$('#join-form').addEventListener('submit', (event) => {
+  event.preventDefault();
+  const id = normalizeRoomCode($('#room-code').value);
+  if (!id) return showToast('Enter a valid room code.', 'error');
+  location.href = appPath(`room/${id}`);
+});
+
+const relativePath = location.pathname.startsWith(appBasePath)
+  ? location.pathname.slice(appBasePath.length) || '/'
+  : location.pathname;
+const routeMatch = relativePath.match(/^\/room\/([a-z0-9-]{6,32})\/?$/i);
+if (routeMatch) joinRoom(routeMatch[1].toLowerCase());
+else setScreen('landing');

@@ -38,7 +38,7 @@ app.use(route('/peerjs'), peerServer);
 
 app.get(route('/health'), (_, response) => response.json({ ok: true }));
 app.get(route('/config'), (_, response) => {
-  const stunUrls = (process.env.STUN_URLS || 'stun:main.lohr.dev:3478')
+  const stunUrls = (process.env.STUN_URLS || 'stun:main.lohr.dev:3478,stun:stun.l.google.com:19302')
     .split(',')
     .map((url) => url.trim())
     .filter((url) => /^stuns?:/i.test(url));
@@ -61,7 +61,7 @@ app.get([route('/'), route('/room/:roomId')], (_, response) => response.type('ht
 
 if (!process.env.VERCEL) {
   server.listen(PORT, HOST, () => {
-    console.log(`screenshare is ready at http://${HOST}:${PORT}${BASE_PATH || '/'}`);
+    console.log(`mise is ready at http://${HOST}:${PORT}${BASE_PATH || '/'}`);
   });
 }
 
@@ -75,11 +75,11 @@ function shutdown() {
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
-function normalizeBasePath(value = '') {
+function normalizeBasePath(value = ''): string {
   const normalized = String(value).trim().replace(/^\/*|\/*$/g, '');
   return normalized ? `/${normalized}` : '';
 }
 
-function route(pathname) {
+function route(pathname: string): string {
   return `${BASE_PATH}${pathname}`;
 }

@@ -48,16 +48,16 @@ before(async () => {
   const port = await getAvailablePort();
   baseUrl = `http://127.0.0.1:${port}`;
   brokerUrl = `ws://127.0.0.1:${port}/peerjs/peerjs`;
-  app = spawn(process.execPath, ['server.mjs'], {
+  app = spawn(process.execPath, ['server.ts'], {
     cwd: new URL('..', import.meta.url),
     env: {
       ...process.env,
       PORT: String(port),
-      STUN_URLS: 'turn:relay.invalid:3478, stun:main.lohr.dev:3478',
+      STUN_URLS: 'turn:relay.invalid:3478, stun:main.lohr.dev:3478, stun:stun.l.google.com:19302',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
-  await waitForOutput(app.stdout, 'screenshare is ready');
+  await waitForOutput(app.stdout, 'mise is ready');
 });
 
 after(() => {
@@ -74,7 +74,9 @@ test('serves the app and public client configuration', async () => {
 
   assert.deepEqual(health, { ok: true });
   assert.equal(config.maxViewers, 5);
-  assert.deepEqual(config.iceServers, [{ urls: ['stun:main.lohr.dev:3478'] }]);
+  assert.deepEqual(config.iceServers, [{
+    urls: ['stun:main.lohr.dev:3478', 'stun:stun.l.google.com:19302'],
+  }]);
   assert.equal('demoTurn' in config, false);
   assert.equal(configResponse.headers.get('cache-control'), 'private, no-store');
   assert.equal(favicon.status, 200);

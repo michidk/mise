@@ -1,5 +1,5 @@
 {
-  "name": "screenshare",
+  "name": "mise",
   "version": "0.1.0",
   "description": "A tiny, open-source, peer-to-peer screen sharing service.",
   "license": "MIT",
@@ -10,14 +10,18 @@
   "bugs": {
     "url": "https://github.com/michidk/mise/issues"
   },
-  "homepage": "https://github.com/michidk/mise#readme",
+  "homepage": "https://miseshare.vercel.app",
   "type": "module",
   "private": true,
   "scripts": {
-    "dev": "node --watch server.mjs",
-    "start": "node server.mjs",
+    "build": "npm run build:client && npm run typecheck",
+    "build:client": "tsc --project tsconfig.client.json",
+    "dev": "npm run build:client && node --watch server.ts",
+    "start": "npm run build:client && node server.ts",
+    "pretest": "npm run build",
     "test": "node --test",
-    "typecheck": "node --check server.mjs && node --check public/app.js"
+    "typecheck": "tsc --noEmit",
+    "vercel-build": "npm run build"
   },
   "engines": {
     "node": "24.x"
@@ -26,5 +30,10 @@
     "express": "^5.1.0",
     "peer": "^1.0.2",
     "peerjs": "^1.5.5"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.5",
+    "@types/node": "^24.10.13",
+    "typescript": "^6.0.2"
   }
 }

@@ -6,7 +6,7 @@ node_modules/
 .playwright/*
 !.playwright/screenshots/
 .playwright/screenshots/*
-!.playwright/screenshots/screenshare.png
+!.playwright/screenshots/mise.png
 coverage/
 .DS_Store
 npm-debug.log*

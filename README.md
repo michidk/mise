@@ -1,12 +1,14 @@
-# screenshare
+# mise
 
 A deliberately small, open-source screen sharing service. Create a room, send a link, and let any participant take a turn sharing—no accounts, downloads, or room history.
 
-[![screenshare landing page](.playwright/screenshots/screenshare.png)](https://miseshare.vercel.app)
+[![mise landing page](.playwright/screenshots/mise.png)](https://miseshare.vercel.app)
 
 Live demo: [miseshare.vercel.app](https://miseshare.vercel.app)
 
 WebRTC carries video directly between browsers. An embedded, self-hosted PeerServer only brokers the initial connections.
+
+The Node server and browser application are authored in strict TypeScript. The client build compiles `src/app.ts` to the browser bundle in `public/app.js`.
 
 ## Run it locally
 
@@ -33,9 +35,11 @@ Vercel serves files in `public/` from its CDN and runs the embedded PeerServer a
 | --- | --- | --- |
 | `PORT` | `3000` | HTTP port |
 | `HOST` | `0.0.0.0` | HTTP bind address |
-| `BASE_PATH` | _(empty)_ | Optional URL prefix, such as `/previews/screenshare` |
+| `BASE_PATH` | _(empty)_ | Optional URL prefix, such as `/previews/mise` |
 | `MAX_VIEWERS` | `5` | Maximum viewers per room |
-| `STUN_URLS` | `stun:main.lohr.dev:3478` | Comma-separated STUN URLs; non-STUN entries are ignored |
+| `STUN_URLS` | `stun:main.lohr.dev:3478,stun:stun.l.google.com:19302` | Comma-separated STUN URLs; the second default is a public fallback and non-STUN entries are ignored |
+
+Browsers receive both defaults and may query them concurrently; WebRTC does not guarantee a strictly sequential failover order.
 
 The app is intentionally STUN-only and does not configure a TURN relay. Connections that cannot establish a direct ICE path will fail instead of relaying media through a third party. A normal reverse proxy can terminate TLS and forward HTTP and WebSocket traffic to this app, but it does not relay WebRTC media.
 
