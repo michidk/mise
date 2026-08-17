@@ -71,6 +71,7 @@ test('serves the app and public client configuration', async () => {
   assert.equal(configResponse.headers.get('cache-control'), 'private, no-store');
   assert.equal(favicon.status, 200);
   assert.match(favicon.headers.get('content-type'), /image\/svg\+xml/);
+  assert.match(favicon.headers.get('cache-control'), /max-age=0/);
   assert.ok(config.iceServers.every(({ urls }) => {
     const candidates = Array.isArray(urls) ? urls : [urls];
     return candidates.every((url) => url.startsWith('stun:'));

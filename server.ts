@@ -57,7 +57,7 @@ app.get(route('/config'), (_, response) => {
 app.use(BASE_PATH || '/', express.static(publicDirectory, {
   index: false,
   extensions: ['html'],
-  maxAge: process.env.NODE_ENV === 'production' ? '1h' : 0,
+  maxAge: 0,
 }));
 app.get(route('/'), (_, response) => response.type('html').send(landingHtml));
 app.get(route('/room/:roomId'), (_, response) => response.type('html').send(roomHtml));
