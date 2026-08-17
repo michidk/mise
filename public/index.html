@@ -33,10 +33,17 @@
         <p class="hero-description">A private screen share that runs in your browser. Start a room, send the link, and you’re live.</p>
 
         <div class="hero-actions">
-          <button id="share-button" class="button button-primary" type="button">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4h13A1.5 1.5 0 0 1 20 5.5v9a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 14.5v-9ZM8 20h8M12 16v4"/></svg>
-            Share my screen
-          </button>
+          <div class="share-start">
+            <button id="share-button" class="button button-primary" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4h13A1.5 1.5 0 0 1 20 5.5v9a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 14.5v-9ZM8 20h8M12 16v4"/></svg>
+              Share my screen
+            </button>
+            <label class="audio-option">
+              <input type="checkbox" data-share-audio />
+              <span class="audio-switch" aria-hidden="true"><i></i></span>
+              <span>Share audio</span>
+            </label>
+          </div>
           <span class="action-or">or</span>
           <form id="join-form" class="join-form">
             <label class="sr-only" for="room-code">Room code</label>
@@ -78,185 +85,91 @@
       <div class="landing-footnote">Built on WebRTC. Your screen travels directly between browsers.</div>
     </main>
 
-    <main id="host-room" class="room-layout" hidden>
-      <section class="stage-section">
-        <div class="room-heading">
-          <div>
-            <span class="live-label"><i></i> Live</span>
-            <h1 id="room-title">You’re sharing your screen</h1>
+    <main id="room" class="room-experience" hidden>
+      <div class="room-topbar">
+        <div class="room-identity">
+          <span id="room-status-dot" class="status-dot waiting"></span>
+          <div><span id="room-kicker">Connecting</span><h1 id="room-title">Room</h1></div>
+        </div>
+        <div class="room-topbar-actions">
+          <div class="participant-count"><svg viewBox="0 0 24 24"><path d="M16 20v-1.5c0-2-1.8-3.5-4-3.5s-4 1.5-4 3.5V20M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM18 9a3 3 0 0 1 0 6M20 20v-1c0-1.4-.8-2.5-2-3"/></svg><span data-participant-count>1 participant</span></div>
+          <button id="copy-room-code" class="room-code-pill" type="button" title="Copy room code"><span>Room</span><b id="room-code-display"></b><svg viewBox="0 0 24 24"><path d="M8 8h11v11H8zM5 16V5h11"/></svg></button>
+          <button id="leave-room-button" class="close-room-button" type="button"><svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg><span>Leave room</span></button>
+        </div>
+      </div>
+
+      <div class="room-workspace">
+        <section class="streams-panel" aria-label="Shared screens">
+          <div class="streams-heading">
+            <div><span class="live-label"><i></i> Live room</span><h2>Screens being shared</h2></div>
+            <span id="stream-count" class="stream-count">No active streams</span>
           </div>
-          <div class="room-actions">
-            <div class="viewer-count"><svg viewBox="0 0 24 24"><path d="M16 20v-1.5c0-2-1.8-3.5-4-3.5s-4 1.5-4 3.5V20M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM18 9a3 3 0 0 1 0 6M20 20v-1c0-1.4-.8-2.5-2-3"/></svg><span id="viewer-count">0 viewers</span></div>
+          <div id="stream-grid" class="stream-grid" aria-live="polite"></div>
+          <div id="streams-empty" class="streams-empty">
+            <span class="empty-screen-icon"><svg viewBox="0 0 24 24"><path d="M4 5h16v12H4zM8 21h8M12 17v4"/></svg></span>
+            <h2>No one is sharing yet</h2>
+            <p>Start a stream and it will appear here for everyone in the room.</p>
+          </div>
+
+          <div class="stream-controls" aria-label="Your stream controls">
+            <div class="stream-control-copy"><span>Your stream</span><strong id="your-stream-status">Not sharing</strong></div>
+            <label id="share-audio-option" class="audio-option audio-option-compact">
+              <input type="checkbox" data-share-audio />
+              <span class="audio-switch" aria-hidden="true"><i></i></span>
+              <span>Include audio</span>
+            </label>
+            <button id="local-audio-button" class="button audio-control-button" type="button" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 5 6.5 9H3v6h3.5L11 19V5ZM15 9a4 4 0 0 1 0 6M18 6a8 8 0 0 1 0 12"/></svg><span>Stop audio</span>
+            </button>
             <div class="quality-settings">
               <button id="quality-button" class="quality-button" data-quality-trigger type="button" aria-expanded="false" aria-controls="quality-menu">
                 <svg viewBox="0 0 24 24"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H3v-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.6V3h4v.1a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/></svg>
-                <span id="quality-label">Balanced</span>
-                <svg class="chevron" viewBox="0 0 24 24"><path d="m8 10 4 4 4-4"/></svg>
+                <span id="quality-label">Balanced</span><svg class="chevron" viewBox="0 0 24 24"><path d="m8 10 4 4 4-4"/></svg>
               </button>
-              <div id="quality-menu" class="quality-menu" hidden>
-                <div class="quality-menu-heading"><strong>Optimize stream for</strong><span>Applied live</span></div>
-                <button type="button" data-quality="data">
-                  <span><strong>Data saver</strong><small>720p · 15 fps · slower networks</small></span><i></i>
-                </button>
-                <button type="button" data-quality="balanced" class="active">
-                  <span><strong>Balanced</strong><small>1080p · 30 fps · everyday sharing</small></span><i></i>
-                </button>
-                <button type="button" data-quality="sharp">
-                  <span><strong>Text clarity</strong><small>1440p · 30 fps · code and documents</small></span><i></i>
-                </button>
-                <button type="button" data-quality="smooth">
-                  <span><strong>Smooth motion</strong><small>1080p · 60 fps · video and demos</small></span><i></i>
-                </button>
-                <button id="advanced-toggle" class="advanced-toggle" type="button" aria-expanded="false" aria-controls="advanced-panel">
-                  <span><strong>Advanced</strong><small>Resolution, frame rate, and bitrate</small></span>
-                  <svg viewBox="0 0 24 24"><path d="m8 10 4 4 4-4"/></svg>
-                </button>
-                <div id="advanced-panel" class="advanced-panel" hidden>
-                  <label>
-                    <span>Resolution</span>
-                    <select id="advanced-resolution">
-                      <option value="1280x720">720p</option>
-                      <option value="1920x1080" selected>1080p</option>
-                      <option value="2560x1440">1440p</option>
-                      <option value="native">Source resolution</option>
-                    </select>
-                  </label>
-                  <label>
-                    <span>Frame rate</span>
-                    <select id="advanced-framerate">
-                      <option value="15">15 fps</option>
-                      <option value="30" selected>30 fps</option>
-                      <option value="60">60 fps</option>
-                    </select>
-                  </label>
-                  <label>
-                    <span>Content type</span>
-                    <select id="advanced-content">
-                      <option value="">Balanced</option>
-                      <option value="detail">Text and detail</option>
-                      <option value="motion">Motion</option>
-                    </select>
-                  </label>
-                  <label class="bitrate-control">
-                    <span>Video bitrate <output id="bitrate-output">3.5 Mbps</output></span>
-                    <input id="advanced-bitrate" type="range" min="0.5" max="12" step="0.5" value="3.5" />
-                    <span class="range-labels"><small>0.5</small><small>12 Mbps</small></span>
-                  </label>
-                  <div class="bandwidth-card">
-                    <div><span>Estimated host upload</span><strong id="bandwidth-total">0 Mbps</strong></div>
-                    <small id="bandwidth-detail">3.5 Mbps × 0 viewers</small>
-                    <small id="bandwidth-capacity">Room full: up to 17.5 Mbps</small>
-                  </div>
-                  <div class="compression-note">
-                    <svg viewBox="0 0 24 24"><path d="M12 3v18M7 7l5-4 5 4M7 17l5 4 5-4M4 12h16"/></svg>
-                    <span><strong>Compression is automatic</strong><small>WebRTC negotiates the codec and adapts quality within your bitrate ceiling.</small></span>
-                  </div>
-                  <button id="apply-advanced" class="apply-advanced" type="button">Apply custom settings</button>
-                </div>
+            </div>
+            <button id="stream-button" class="button button-primary stream-button" type="button" disabled><svg viewBox="0 0 24 24"><path d="M4 5h16v12H4zM8 21h8M12 17v4"/></svg><span>Start sharing</span></button>
+          </div>
+        </section>
+
+        <aside class="room-sidebar">
+          <section class="invite-strip">
+            <div><span>Invite people</span><strong>Share this room</strong></div>
+            <button id="copy-invite-button" class="button button-secondary" type="button"><svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.5.5l2-2a5 5 0 0 0-7-7l-1.2 1.2M14 11a5 5 0 0 0-7.5-.5l-2 2a5 5 0 0 0 7 7l1.2-1.2"/></svg><span>Copy link</span></button>
+          </section>
+          <section class="chat-panel" aria-label="Room chat and activity">
+            <div class="chat-heading">
+              <div><span class="chat-live-dot"></span><h2>Chat &amp; activity</h2></div>
+              <div class="chat-heading-actions">
+                <span data-participant-count>1 participant</span>
+                <button class="chat-sound-toggle" data-chat-sound-toggle type="button" aria-label="Mute notification sounds" aria-pressed="true" title="Mute notification sounds"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/><path class="chat-sound-off" d="m4 4 16 16"/></svg></button>
               </div>
             </div>
-            <button id="close-room-button" class="close-room-button" type="button">
-              <svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
-              Close room
-            </button>
-          </div>
-        </div>
-        <div class="video-shell host-video-shell">
-          <video id="local-video" autoplay muted playsinline controls></video>
-          <div id="host-placeholder" class="video-empty"><svg viewBox="0 0 24 24"><path d="M4 5h16v12H4zM8 21h8M12 17v4"/></svg><span id="host-placeholder-text">Preparing your preview…</span><button id="host-share-button" class="button button-primary" type="button" hidden>Share your screen</button></div>
-        </div>
-        <button id="stop-button" class="button stop-button" type="button">
-          <span></span> Stop sharing
-        </button>
-      </section>
-
-      <aside class="room-sidebar">
-        <section class="share-panel">
-          <div class="share-panel-heading">
-            <div class="panel-icon"><svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.5.5l2-2a5 5 0 0 0-7-7l-1.2 1.2M14 11a5 5 0 0 0-7.5-.5l-2 2a5 5 0 0 0 7 7l1.2-1.2"/></svg></div>
-            <div><p class="panel-kicker">Invite people</p><h2>Share this link</h2></div>
-          </div>
-          <div class="room-code-card">
-            <div>
-              <span>Room code</span>
-              <div id="host-room-code" class="room-code-digits" aria-label="Room code"></div>
+            <div class="chat-messages" data-chat-messages>
+              <div class="chat-empty" data-chat-empty><svg viewBox="0 0 24 24"><path d="M20 15a3 3 0 0 1-3 3H9l-5 3v-6a3 3 0 0 1-1-2.2V7a3 3 0 0 1 3-3h11a3 3 0 0 1 3 3v8Z"/></svg><span>Room events and messages appear here.</span></div>
             </div>
-            <button id="copy-code-button" type="button" aria-label="Copy room code" title="Copy room code">
-              <svg viewBox="0 0 24 24"><path d="M8 8h11v11H8zM5 16V5h11"/></svg>
-            </button>
-          </div>
-          <div class="share-link-label"><span>Direct link</span><i></i></div>
-          <div class="share-link-wrap">
-            <input id="share-link" readonly aria-label="Share link" />
-            <button id="copy-button" class="button button-primary" type="button">
-              <svg viewBox="0 0 24 24"><path d="M8 8h11v11H8zM5 16V5h11"/></svg>
-              <span>Copy</span>
-            </button>
-          </div>
-        </section>
-        <section class="chat-panel" aria-label="Room chat">
-          <div class="chat-heading">
-            <div><span class="chat-live-dot"></span><h2>Live chat</h2></div>
-            <span>Room only</span>
-          </div>
-          <div class="chat-messages" data-chat-messages>
-            <div class="chat-empty" data-chat-empty>
-              <svg viewBox="0 0 24 24"><path d="M20 15a3 3 0 0 1-3 3H9l-5 3v-6a3 3 0 0 1-1-2.2V7a3 3 0 0 1 3-3h11a3 3 0 0 1 3 3v8Z"/></svg>
-              <span>Messages will show up here.</span>
-            </div>
-          </div>
-          <form class="chat-form" data-chat-form>
-            <label class="sr-only" for="host-chat-input">Chat message</label>
-            <input id="host-chat-input" data-chat-input maxlength="500" autocomplete="off" placeholder="Write a message…" />
-            <button type="submit" aria-label="Send message"><svg viewBox="0 0 24 24"><path d="m21 3-7.5 18-3.6-7-6.9-3.5L21 3Z"/><path d="m10 14 4-4"/></svg></button>
-          </form>
-        </section>
-      </aside>
-    </main>
-
-    <main id="viewer-room" class="viewer-layout" hidden>
-      <div class="viewer-topbar">
-        <div><span id="viewer-status-dot" class="status-dot waiting"></span><strong id="viewer-status">Connecting…</strong></div>
-        <div class="viewer-room-actions">
-          <span class="room-code-small">Room <b id="viewer-room-code"></b></span>
-          <button id="viewer-quality-button" class="quality-button" data-quality-trigger type="button" aria-expanded="false" aria-controls="quality-menu">
-            <svg viewBox="0 0 24 24"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H3v-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.6V3h4v.1a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/></svg>
-            <span id="viewer-quality-label">Balanced</span>
-          </button>
-          <button id="viewer-share-button" class="button button-primary viewer-share-button" type="button" disabled>Share screen</button>
-        </div>
-      </div>
-      <div class="viewer-grid">
-        <div id="viewer-video-shell" class="video-shell viewer-video-shell">
-          <video id="remote-video" autoplay playsinline controls></video>
-          <div id="viewer-placeholder" class="viewer-placeholder">
-            <div class="loader-rings"><i></i><i></i><span><svg viewBox="0 0 24 24"><path d="M4 5h16v12H4zM8 21h8M12 17v4"/></svg></span></div>
-            <h1 id="viewer-message">Joining the room…</h1>
-            <p id="viewer-detail">The shared screen will appear here in a moment.</p>
-            <button id="viewer-home" class="button button-secondary" type="button" hidden>Back home</button>
-          </div>
-          <button id="play-button" class="button button-primary play-button" type="button" hidden>Play stream</button>
-        </div>
-        <aside class="chat-panel viewer-chat" aria-label="Room chat">
-          <div class="chat-heading">
-            <div><span class="chat-live-dot"></span><h2>Live chat</h2></div>
-            <span>Room only</span>
-          </div>
-          <div class="chat-messages" data-chat-messages>
-            <div class="chat-empty" data-chat-empty>
-              <svg viewBox="0 0 24 24"><path d="M20 15a3 3 0 0 1-3 3H9l-5 3v-6a3 3 0 0 1-1-2.2V7a3 3 0 0 1 3-3h11a3 3 0 0 1 3 3v8Z"/></svg>
-              <span>Join the conversation.</span>
-            </div>
-          </div>
-          <form class="chat-form" data-chat-form>
-            <label class="sr-only" for="viewer-chat-input">Chat message</label>
-            <input id="viewer-chat-input" data-chat-input maxlength="500" autocomplete="off" placeholder="Write a message…" disabled />
-            <button type="submit" aria-label="Send message" disabled><svg viewBox="0 0 24 24"><path d="m21 3-7.5 18-3.6-7-6.9-3.5L21 3Z"/><path d="m10 14 4-4"/></svg></button>
-          </form>
+            <form class="chat-form" data-chat-form>
+              <label class="sr-only" for="chat-input">Chat message</label>
+              <input id="chat-input" data-chat-input maxlength="500" autocomplete="off" placeholder="Message the room…" disabled />
+              <button type="submit" aria-label="Send message" disabled><svg viewBox="0 0 24 24"><path d="m21 3-7.5 18-3.6-7-6.9-3.5L21 3Z"/><path d="m10 14 4-4"/></svg></button>
+            </form>
+          </section>
         </aside>
       </div>
-      <p class="viewer-privacy"><svg viewBox="0 0 24 24"><path d="M7 10V8a5 5 0 0 1 10 0v2M6 10h12v10H6z"/></svg> Peer-to-peer encrypted connection</p>
+      <p class="room-privacy"><svg viewBox="0 0 24 24"><path d="M7 10V8a5 5 0 0 1 10 0v2M6 10h12v10H6z"/></svg> Every stream is peer-to-peer encrypted and travels directly between browsers.</p>
     </main>
+
+    <div id="quality-menu" class="quality-menu" hidden>
+      <div class="quality-menu-heading"><strong>Lossless text pipeline</strong><span>Applied live</span></div>
+      <button type="button" data-quality="efficient"><span><strong>Text efficient</strong><small>Native pixels · 4 fps · maximum compression</small></span><i></i></button>
+      <button type="button" data-quality="balanced" class="active"><span><strong>Lossless text</strong><small>Native pixels · 6 fps · balanced compression</small></span><i></i></button>
+      <button type="button" data-quality="responsive"><span><strong>Text responsive</strong><small>Native pixels · 10 fps · faster updates</small></span><i></i></button>
+      <button type="button" disabled><span><strong>Smooth motion</strong><small>1080p · 60 fps · planned video pipeline</small></span><span class="coming-soon">Later</span></button>
+      <div class="pipeline-summary">
+        <span>Pixel-exact tile deltas</span><b>DEFLATE</b>
+        <p>Only changed 128 px tiles are sent. A fresh lossless keyframe repairs the stream every 15 seconds.</p>
+      </div>
+      <div class="bandwidth-card"><div><span>Estimated upload</span><strong id="bandwidth-total">0 Mbps</strong></div><small id="bandwidth-detail">Content-dependent lossless deltas × 0 peers</small><small id="bandwidth-capacity">Text mode is lossless; motion can use substantially more bandwidth.</small></div>
+    </div>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
   </body>

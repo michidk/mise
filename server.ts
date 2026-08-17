@@ -11,8 +11,9 @@ const HOST = process.env.HOST || '0.0.0.0';
 const MAX_VIEWERS = Number(process.env.MAX_VIEWERS || 5);
 const BASE_PATH = normalizeBasePath(process.env.BASE_PATH);
 const publicDirectory = path.join(__dirname, 'public');
-const indexHtml = readFileSync(path.join(publicDirectory, 'index.html'), 'utf8')
-  .replace('<base href="/" />', `<base href="${BASE_PATH || ''}/" />`);
+const indexHtml = readFileSync(path.join(publicDirectory, 'index.html'), 'utf8');
+const landingHtml = indexHtml.replace('<base href="/" />', '<base href="./" />');
+const roomHtml = indexHtml.replace('<base href="/" />', '<base href="../" />');
 
 const app = express();
 const server = http.createServer(app);
@@ -57,7 +58,8 @@ app.use(BASE_PATH || '/', express.static(publicDirectory, {
   extensions: ['html'],
   maxAge: process.env.NODE_ENV === 'production' ? '1h' : 0,
 }));
-app.get([route('/'), route('/room/:roomId')], (_, response) => response.type('html').send(indexHtml));
+app.get(route('/'), (_, response) => response.type('html').send(landingHtml));
+app.get(route('/room/:roomId'), (_, response) => response.type('html').send(roomHtml));
 
 if (!process.env.VERCEL) {
   server.listen(PORT, HOST, () => {

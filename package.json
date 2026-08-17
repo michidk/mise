@@ -15,12 +15,14 @@
   "private": true,
   "scripts": {
     "build": "npm run build:client && npm run typecheck",
-    "build:client": "tsc --project tsconfig.client.json",
+    "build:client": "tsc --project tsconfig.client.json --noEmit && esbuild src/app.ts --bundle --format=esm --target=es2024 --outfile=public/app.js",
     "dev": "npm run build:client && node --watch server.ts",
     "start": "npm run build:client && node server.ts",
     "pretest": "npm run build",
-    "test": "node --test",
+    "test": "node --import tsx --test",
+    "test:unit": "node --import tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit",
+    "verify": "npm test",
     "vercel-build": "npm run build"
   },
   "engines": {
@@ -28,12 +30,15 @@
   },
   "dependencies": {
     "express": "^5.1.0",
+    "fflate": "^0.8.3",
     "peer": "^1.0.2",
     "peerjs": "^1.5.5"
   },
   "devDependencies": {
     "@types/express": "^5.0.5",
     "@types/node": "^24.10.13",
+    "esbuild": "^0.25.9",
+    "tsx": "^4.23.12",
     "typescript": "^6.0.2"
   }
 }

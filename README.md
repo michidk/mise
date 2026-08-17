@@ -1,6 +1,6 @@
 # mise
 
-A deliberately small, open-source screen sharing service. Create a room, send a link, and let any participant take a turn sharing—no accounts, downloads, or room history.
+A deliberately small, open-source screen sharing service. Create a room, send a link, and let several participants share at once—no accounts, downloads, or persisted room history.
 
 [![mise landing page](.playwright/screenshots/mise.png)](https://miseshare.vercel.app)
 
@@ -10,7 +10,7 @@ Live demo: [miseshare.vercel.app](https://miseshare.vercel.app)
 
 If a direct connection fails, use [icecheck](https://github.com/michidk/icecheck) ([live tool](https://icecheck.vercel.app)) to isolate signaling, ICE candidate, data-channel, and media-path problems between two browsers.
 
-WebRTC carries video directly between browsers. An embedded, self-hosted PeerServer only brokers the initial connections.
+WebRTC data channels carry lossless screen deltas directly between browsers. An embedded, self-hosted PeerServer only brokers the initial connections.
 
 The Node server and browser application are authored in strict TypeScript. The client build compiles `src/app.ts` to the browser bundle in `public/app.js`.
 
@@ -49,12 +49,14 @@ The app is intentionally STUN-only and does not configure a TURN relay. Connecti
 
 ## How it works
 
-- A room code is the creator's temporary PeerJS ID. The room remains open when screen sharing stops and closes only when the creator leaves or presses **Close room**.
-- One participant presents at a time. That presenter creates a direct WebRTC connection to every other room participant.
-- Viewers can start sharing whenever the room has no active presenter; stopping returns everyone to the persistent room and leaves chat connected.
-- A small room chat uses the same peer-to-peer connections and keeps only the latest 50 messages in the host's browser memory.
-- Hosts can optimize a live stream for text clarity or smooth motion, use balanced/data-saver presets, or set resolution, frame rate, bitrate, and content hints individually.
-- The quality panel estimates host upload for the current viewer count and a full room. This is an approximate ceiling; WebRTC compression and congestion control can send less.
+- A room code is the creator's temporary PeerJS ID. The room remains open when sharing stops and closes only when the host leaves or presses **Close room**.
+- Every participant can publish independently, so several screens can be live at once. Each publisher opens direct, encrypted connections to the other room participants.
+- Rooms remain link-open, but the host issues an ephemeral media credential only after admitting a participant. Text and audio connections must match both the admitted PeerJS ID and that credential, so direct connections cannot bypass the room limit.
+- The first media codec is `text-lossless-v1`: it captures native RGBA pixels, compares 128 px tiles exactly, DEFLATE-compresses only changed tiles, and sends a periodic repair keyframe every 15 seconds. Frames are split into 48 KiB messages; a dropped or invalid delta triggers an immediate keyframe request before rendering resumes.
+- Stream audio is kept on a separate native WebRTC media track. Publishers can stop sending it without restarting the screen codec, and every receiver can mute each incoming stream independently.
+- Codec settings and stream ownership are room metadata. Cards show the host, current codec settings, and audio state without coupling the UI to the encoder implementation.
+- A host-coordinated activity log records joins, leaves, stream starts/stops, audio changes, and settings changes alongside chat. Only the latest 100 entries live in the host's browser memory.
+- `src/media/index.ts` exposes the media boundary and owns encoder, renderer, transport, backpressure, and presentation cleanup. `src/room/index.ts` exposes validated directional messages and the room state machine. A later 1080p60 WebCodecs pipeline can implement the same room-facing lifecycle while reusing signaling, cards, controls, and activity events.
 - Self-hosted [PeerJS](https://peerjs.com/) handles signaling and connection negotiation. PeerServer never receives screen media.
 - There is no recording, analytics, database, or authentication.
 
