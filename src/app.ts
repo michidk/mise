@@ -152,14 +152,11 @@ async function captureDisplay() {
   return stream;
 }
 
-async function startSharing() {
+async function startRoom() {
   const button = $('#share-button');
-  let captured: MediaStream | undefined;
   button.disabled = true;
   button.classList.add('loading');
-  setShareAudioControlsDisabled(true);
   try {
-    captured = await captureDisplay();
     await configReady;
     signaling = await createRoom(appPath('api'), {
       password: optionalInputValue('#room-password'),
@@ -175,21 +172,17 @@ async function startSharing() {
     setChatEnabled(true);
     setRoomConnectionState('live', 'Host · room open');
     announceSystem('Host', 'joined the room.', 'joined');
-    await beginLocalPresentation(captured);
+    updateRoomUI();
   } catch (error: unknown) {
-    if (!localPresentation && captured) stopMediaStream(captured);
     disposeLocalPresentation();
     disposeConnections();
     session.reset();
     setScreen('landing');
     history.replaceState({}, '', appPath());
-    if (errorName(error) !== 'NotAllowedError') {
-      showToast(errorMessage(error, 'Could not start the room.'), 'error');
-    }
+    showToast(errorMessage(error, 'Could not start the room.'), 'error');
   } finally {
     button.disabled = false;
     button.classList.remove('loading');
-    setShareAudioControlsDisabled(Boolean(localPresentation));
   }
 }
 
@@ -1067,7 +1060,7 @@ function errorMessage(error: unknown, fallback: string) {
   return error instanceof Error && error.message ? error.message : fallback;
 }
 
-$('#share-button').addEventListener('click', startSharing);
+$('#share-button').addEventListener('click', startRoom);
 $('#stream-button').addEventListener('click', () => localPresentation ? stopLocalPresentation() : startRoomPresentation());
 $('#local-audio-button').addEventListener('click', toggleLocalAudio);
 $('#leave-room-button').addEventListener('click', () => void leaveRoom());

@@ -37,18 +37,17 @@
               <span class="action-card-icon" aria-hidden="true">
                 <svg viewBox="0 0 24 24"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4h13A1.5 1.5 0 0 1 20 5.5v9a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 14.5v-9ZM8 20h8M12 16v4"/></svg>
               </span>
-              <span><small>Host a room</small><strong>Start sharing</strong></span>
+              <span><small>Host a room</small><strong>Create a room</strong></span>
             </div>
             <p>Open a private room, then send the invite link.</p>
             <div class="room-create-options">
               <label><span>Password <small>Optional</small></span><input id="room-password" type="password" maxlength="128" autocomplete="new-password" placeholder="Add a password" /></label>
               <label><span>People</span><input id="room-limit" type="number" min="2" max="6" value="6" inputmode="numeric" /></label>
             </div>
-            <label class="audio-option audio-option-card">
-              <input type="checkbox" data-share-audio />
-              <span class="audio-switch" aria-hidden="true"><i></i></span>
-              <span><strong>Include shared audio</strong><small>When the browser supports it</small></span>
-            </label>
+            <div class="start-room-note">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 4 7v5c0 5 3.4 8 8 9 4.6-1 8-4 8-9V7l-8-4Z"/><path d="m9 12 2 2 4-4"/></svg>
+              <span>Choose your screen and audio after the room opens.</span>
+            </div>
             <button id="share-button" class="button button-primary" type="button">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4h13A1.5 1.5 0 0 1 20 5.5v9a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 14.5v-9ZM8 20h8M12 16v4"/></svg>
               Start room

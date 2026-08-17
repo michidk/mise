@@ -88,7 +88,7 @@ test('serves the app and public client configuration', async () => {
   assert.equal(room.status, 200);
   const page = await room.text();
   assert.match(page, /<base href="\.\.\/" \/>/);
-  assert.match(page, /Start sharing/);
+  assert.match(page, /Create a room/);
   assert.match(page, /Start room/);
   assert.match(page, /Join a room/);
   assert.match(page, /Chat &amp; activity/);
@@ -103,6 +103,7 @@ test('serves the app and public client configuration', async () => {
   assert.match(page, /id="stream-button"/);
   assert.match(page, /id="local-audio-button"/);
   assert.match(page, /data-share-audio/);
+  assert.equal((page.match(/data-share-audio/g) || []).length, 1);
   assert.match(page, /id="copy-invite-button"/);
   assert.match(page, /id="copy-room-code"/);
   assert.match(page, /Every stream is peer-to-peer encrypted/);
