@@ -16,8 +16,9 @@
   "scripts": {
     "build": "npm run build:client && npm run typecheck",
     "build:client": "tsc --project tsconfig.client.json --noEmit && esbuild src/app.ts --bundle --format=esm --target=es2024 --outfile=public/app.js",
-    "dev": "npm run build:client && node --watch server.ts",
-    "start": "npm run build:client && node server.ts",
+    "db:migrate": "node --import tsx scripts/migrate.ts",
+    "dev": "npm run build:client && node --import tsx --watch server.ts",
+    "start": "npm run build:client && node --import tsx server.ts",
     "pretest": "npm run build",
     "test": "node --import tsx --test",
     "test:unit": "node --import tsx --test test/*.test.ts",
@@ -29,14 +30,15 @@
     "node": "24.x"
   },
   "dependencies": {
+    "@msgpack/msgpack": "^3.1.3",
     "express": "^5.1.0",
     "fflate": "^0.8.3",
-    "peer": "^1.0.2",
-    "peerjs": "^1.5.5"
+    "pg": "^8.23.0"
   },
   "devDependencies": {
     "@types/express": "^5.0.5",
     "@types/node": "^24.10.13",
+    "@types/pg": "^8.21.0",
     "esbuild": "^0.25.9",
     "tsx": "^4.23.12",
     "typescript": "^6.0.2"

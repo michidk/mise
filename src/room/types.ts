@@ -31,16 +31,10 @@ export interface ChatActivity {
 
 export type ChatEntry = ChatMessage | ChatActivity;
 
-export interface MediaCredential {
-  peerId: string;
-  mediaToken: string;
-}
-
 export type HostRoomMessage =
   | { type: 'room-full' }
   | { type: 'room-closed' }
-  | { type: 'accepted'; name: string; hostId: string; mediaToken: string; participants: MediaCredential[] }
-  | { type: 'participant-authorized'; participant: MediaCredential }
+  | { type: 'accepted'; name: string; hostId: string }
   | { type: 'chat-history'; messages: ChatEntry[] }
   | ChatEntry
   | { type: 'participant-count'; participantCount: number }

@@ -1,10 +1,3 @@
-import type {
-  DataConnection,
-  MediaConnection,
-  Peer as PeerInstance,
-  PeerError,
-  PeerJSOption,
-} from 'peerjs';
 import {
   createTextPresentation,
   TEXT_CODEC_ID,
@@ -14,9 +7,7 @@ import {
 } from './media/index.js';
 import {
   parseHostRoomMessage,
-  parsePresenter,
   parseViewerRoomMessage,
-  RoomAdmission,
   RoomSession,
   type ActivityKind,
   type ChatActivity,
@@ -24,8 +15,8 @@ import {
   type ChatMessage,
   type PresenterInfo,
 } from './room/index.js';
-
-declare const Peer: typeof PeerInstance;
+import { RtcMesh, type RtcChannel, type RtcPeerChannels } from './rtc/index.js';
+import { createRoom, joinRoom as joinSignalingRoom, RestSignalingSession, SignalingError } from './signaling/index.js';
 
 type AppElement = HTMLElement & {
   disabled: boolean;
@@ -36,7 +27,7 @@ type ToastTone = 'default' | 'error';
 type QualityName = keyof typeof qualityPresets;
 
 interface ViewerEntry {
-  control: DataConnection;
+  control: RtcChannel;
   name: string;
   lastMessageAt: number;
 }
@@ -83,13 +74,13 @@ const qualityPresets = {
   },
 } satisfies Record<string, TextCodecSettings>;
 
-let peer: PeerInstance | undefined;
+let mesh: RtcMesh | undefined;
+let signaling: RestSignalingSession | undefined;
 const session = new RoomSession();
-const admission = new RoomAdmission();
-let viewerControl: DataConnection | undefined;
+let viewerControl: RtcChannel | undefined;
 let localPresentation: TextPresentation | undefined;
 let shareAudioEnabled = false;
-let maxViewers = 5;
+let maxParticipants = 6;
 let guestNumber = 0;
 let currentQuality: QualityName = 'balanced';
 let currentStreamSettings: TextCodecSettings = { ...qualityPresets.balanced };
@@ -102,17 +93,22 @@ let toastTimer: ReturnType<typeof setTimeout> | undefined;
 
 const hostConnections = new Map<string, ViewerEntry>();
 const presenters = new Map<string, PresenterInfo>();
-const incomingTextConnections = new Map<string, DataConnection>();
-const incomingAudioCalls = new Map<string, MediaConnection>();
+const peerChannels = new Map<string, RtcPeerChannels>();
+const incomingTextReceivers = new Map<string, TextStreamReceiver>();
 const remoteAudioElements = new Map<string, HTMLAudioElement>();
 const mutedPresenters = new Set<string>();
 const chatHistory: ChatEntry[] = [];
 
 const configReady = fetch(appPath('config'))
   .then((response) => response.json())
-  .then((config: { iceServers: RTCIceServer[]; maxViewers: number }) => {
+  .then((config: { iceServers: RTCIceServer[]; maxParticipants: number }) => {
     rtcConfig = { iceServers: config.iceServers };
-    maxViewers = config.maxViewers;
+    maxParticipants = config.maxParticipants;
+    const input = document.querySelector<HTMLInputElement>('#room-limit');
+    if (input) {
+      input.max = String(maxParticipants);
+      input.value = String(Math.min(Number(input.value) || maxParticipants, maxParticipants));
+    }
     updateBandwidthEstimate();
   })
   .catch(() => {});
@@ -136,44 +132,9 @@ function showToast(message: string, tone: ToastTone = 'default') {
   toastTimer = setTimeout(() => toast.classList.remove('show'), 3200);
 }
 
-function makeRoomId() {
-  const alphabet = 'abcdefghijkmnpqrstuvwxyz23456789';
-  const bytes = new Uint8Array(8);
-  crypto.getRandomValues(bytes);
-  const code = Array.from(bytes, (byte) => alphabet[byte & 31]).join('');
-  return `${code.slice(0, 4)}-${code.slice(4)}`;
-}
-
 function normalizeRoomCode(value: string): string {
   const normalized = value.trim().toLowerCase().replace(/\s+/g, '');
   return normalized.match(/(?:room\/)?([a-z0-9-]{6,32})\/?$/)?.[1] || '';
-}
-
-function peerOptions(): PeerJSOption {
-  const secure = location.protocol === 'https:';
-  return {
-    host: location.hostname,
-    port: location.port ? Number(location.port) : secure ? 443 : 80,
-    path: appPath('peerjs'),
-    secure,
-    config: rtcConfig,
-    debug: 1,
-  };
-}
-
-function waitForPeerOpen(instance: PeerInstance): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const onOpen = (id: string) => {
-      instance.off('error', onError);
-      resolve(id);
-    };
-    const onError = (error: PeerError<string>) => {
-      instance.off('open', onOpen);
-      reject(error);
-    };
-    instance.once('open', onOpen);
-    instance.once('error', onError);
-  });
 }
 
 async function captureDisplay() {
@@ -193,35 +154,33 @@ async function captureDisplay() {
 
 async function startSharing() {
   const button = $('#share-button');
+  let captured: MediaStream | undefined;
   button.disabled = true;
   button.classList.add('loading');
   setShareAudioControlsDisabled(true);
   try {
-    const captured = await captureDisplay();
+    captured = await captureDisplay();
     await configReady;
-    session.startHosting(makeRoomId());
-    admission.startHost(session.roomId);
+    signaling = await createRoom(appPath('api'), {
+      password: optionalInputValue('#room-password'),
+      maxParticipants: selectedRoomLimit(),
+    });
+    session.startHosting(signaling.roomId, signaling.participantId);
     history.replaceState({}, '', appPath(`room/${session.roomId}`));
     prepareRoomShell();
     setRoomConnectionState('waiting', 'Opening room');
 
-    peer = new Peer(session.roomId, peerOptions());
-    peer.on('connection', routeDataConnection);
-    peer.on('call', receiveAudioCall);
-    peer.on('error', handleHostPeerError);
-    peer.on('disconnected', reconnectPeer);
-    await waitForPeerOpen(peer);
+    startNativeMesh(signaling);
     session.markLive();
     setChatEnabled(true);
     setRoomConnectionState('live', 'Host · room open');
     announceSystem('Host', 'joined the room.', 'joined');
     await beginLocalPresentation(captured);
   } catch (error: unknown) {
+    if (!localPresentation && captured) stopMediaStream(captured);
     disposeLocalPresentation();
-    peer?.destroy();
-    peer = undefined;
+    disposeConnections();
     session.reset();
-    admission.reset();
     setScreen('landing');
     history.replaceState({}, '', appPath());
     if (errorName(error) !== 'NotAllowedError') {
@@ -234,32 +193,22 @@ async function startSharing() {
   }
 }
 
-async function joinRoom(id: string) {
+async function joinRoom(id: string, password = '') {
   session.startJoining(id);
-  admission.startViewer(id);
   prepareRoomShell();
   setRoomConnectionState('waiting', 'Connecting to host');
   await configReady;
-  peer = new Peer(peerOptions());
-  peer.on('connection', routeDataConnection);
-  peer.on('call', receiveAudioCall);
-  peer.on('error', handleViewerPeerError);
-  peer.on('disconnected', reconnectPeer);
   try {
-    await waitForPeerOpen(peer);
-    viewerControl = peer.connect(session.roomId, {
-      metadata: { role: 'viewer', version: 4 },
-      serialization: 'json',
-      reliable: true,
-    });
-    viewerControl.on('open', () => setRoomConnectionState('waiting', 'Waiting for host'));
-    viewerControl.on('data', handleRoomMessage);
-    viewerControl.on('close', () => {
-      if (!peer?.destroyed) endViewer('The room is no longer available.');
-    });
-    viewerControl.on('error', () => endViewer('Could not reach the room host.'));
+    signaling = await joinSignalingRoom(appPath('api'), id, { password });
+    session.setLocalPeer(signaling.participantId, signaling.hostId);
+    startNativeMesh(signaling);
+    for (const participant of signaling.participants) mesh?.connect(participant.id);
   } catch (error: unknown) {
-    handleViewerPeerError(error);
+    if (error instanceof SignalingError && error.code === 'password-required') {
+      const entered = window.prompt('Enter the password for this room:');
+      if (entered !== null) return joinRoom(id, entered);
+    }
+    endViewer(errorMessage(error, 'Could not connect to this room.'));
   }
 }
 
@@ -272,59 +221,63 @@ function prepareRoomShell() {
   updateRoomUI();
 }
 
-function routeDataConnection(connection: DataConnection) {
-  if (connection.metadata?.role === 'viewer' && session.isHost) {
-    acceptViewer(connection);
-    return;
-  }
-  if (connection.metadata?.role === 'text-stream') {
-    acceptTextStream(connection);
-    return;
-  }
-  connection.close();
+function startNativeMesh(roomSignaling: RestSignalingSession) {
+  mesh = new RtcMesh(roomSignaling.participantId, rtcConfig, (signal) => roomSignaling.send(signal), {
+    peerAvailable: routePeer,
+    peerClosed: handlePeerClosed,
+    audioTrack: receiveAudioTrack,
+    error: (_, error) => showToast(error.message || 'A peer connection failed.', 'error'),
+  });
+  roomSignaling.onSignal((signal) => mesh?.handleSignal(signal));
+  roomSignaling.onUnavailable(() => {
+    if (!session.isHost) endViewer('The room is no longer available.');
+    else showToast('The room service connection expired.', 'error');
+  });
+  roomSignaling.start();
 }
 
-function acceptViewer(connection: DataConnection) {
-  const viewerId = connection.peer;
-  if (hostConnections.has(viewerId)) {
-    connection.close();
+function routePeer(peerConnection: RtcPeerChannels) {
+  peerChannels.set(peerConnection.peerId, peerConnection);
+  if (session.isHost) {
+    if (peerConnection.control.open) acceptViewer(peerConnection);
+    else peerConnection.control.on('open', () => acceptViewer(peerConnection));
     return;
   }
-  if (hostConnections.size >= maxViewers) {
-    connection.on('open', () => {
-      connection.send({ type: 'room-full' });
-      setTimeout(() => connection.close(), 100);
-    });
+  if (peerConnection.peerId === session.hostId) {
+    viewerControl = peerConnection.control;
+    viewerControl.on('message', handleRoomMessage);
+    viewerControl.on('close', () => endViewer('The room is no longer available.'));
+    setRoomConnectionState('waiting', 'Waiting for host');
+  }
+  if (localPresentation) connectLocalStreamTo(peerConnection.peerId);
+  attachIncomingTextStream(peerConnection.peerId);
+}
+
+function acceptViewer(peerConnection: RtcPeerChannels) {
+  const viewerId = peerConnection.peerId;
+  const connection = peerConnection.control;
+  if (hostConnections.has(viewerId)) {
     return;
   }
   guestNumber += 1;
-  const credential = admission.admit(viewerId);
   hostConnections.set(viewerId, { control: connection, name: `Guest ${guestNumber}`, lastMessageAt: 0 });
-  connection.on('open', () => {
-    const viewer = hostConnections.get(viewerId);
-    if (!viewer || !peer) return;
-    connection.send({
-      type: 'accepted',
-      name: viewer.name,
-      hostId: peer.id,
-      mediaToken: credential.mediaToken,
-      participants: admission.credentials(viewerId),
-    });
-    for (const [participantId, participant] of hostConnections) {
-      if (participantId !== viewerId && participant.control.open) {
-        participant.control.send({ type: 'participant-authorized', participant: credential });
-      }
+  const viewer = hostConnections.get(viewerId);
+  if (!viewer) return;
+  connection.send({ type: 'accepted', name: viewer.name, hostId: session.hostId });
+  connection.send({ type: 'chat-history', messages: chatHistory });
+  connection.send({ type: 'room-state', presenters: [...presenters.values()] });
+  announceSystem(viewer.name, 'joined the room.', 'joined');
+  broadcastParticipantCount();
+  for (const presenter of presenters.values()) {
+    if (presenter.id === session.hostId) connectLocalStreamTo(viewerId);
+    else hostConnections.get(presenter.id)?.control.send({ type: 'participant-joined', peerId: viewerId });
+  }
+  for (const [participantId, participant] of hostConnections) {
+    if (participantId !== viewerId && participant.control.open) {
+      participant.control.send({ type: 'participant-joined', peerId: viewerId });
     }
-    connection.send({ type: 'chat-history', messages: chatHistory });
-    connection.send({ type: 'room-state', presenters: [...presenters.values()] });
-    announceSystem(viewer.name, 'joined the room.', 'joined');
-    broadcastParticipantCount();
-    for (const presenter of presenters.values()) {
-      if (presenter.id === peer.id) connectLocalStreamTo(viewerId);
-      else hostConnections.get(presenter.id)?.control.send({ type: 'participant-joined', peerId: viewerId });
-    }
-  });
-  connection.on('data', (value) => handleViewerData(viewerId, value));
+  }
+  connection.on('message', (value) => handleViewerData(viewerId, value));
   connection.on('close', () => removeViewer(viewerId, connection));
   connection.on('error', () => removeViewer(viewerId, connection));
 }
@@ -340,17 +293,10 @@ function handleRoomMessage(value: unknown) {
       endViewer('The room was closed by its host.');
       break;
     case 'accepted':
-      if (!peer?.id || !admission.accept(peer.id, message.mediaToken, message.participants)) {
-        endViewer('The room admission response was invalid.');
-        break;
-      }
       session.markLive({ viewerName: message.name, hostId: message.hostId });
       setChatEnabled(true);
       setRoomConnectionState('live', `${session.viewerName} · connected`);
       updateRoomUI();
-      break;
-    case 'participant-authorized':
-      admission.authorize(message.participant);
       break;
     case 'chat-history':
       loadChatHistory(message.messages);
@@ -386,9 +332,9 @@ function handleRoomMessage(value: unknown) {
       if (localPresentation) connectLocalStreamTo(message.peerId);
       break;
     case 'participant-left':
-      admission.revoke(message.peerId);
       disconnectLocalStreamFrom(message.peerId);
       if (presenters.has(message.peerId)) removePresenter(message.peerId);
+      mesh?.closePeer(message.peerId);
       break;
   }
 }
@@ -411,7 +357,7 @@ function handleViewerData(viewerId: string, value: unknown) {
     upsertPresenter(presenter);
     broadcast({ type: 'stream-started', presenter });
     announceSystem(viewer.name, 'started sharing.', 'stream-started');
-    const participants = [peer?.id, ...hostConnections.keys()].filter((id): id is string => Boolean(id && id !== viewerId));
+    const participants = [signaling?.participantId, ...hostConnections.keys()].filter((id): id is string => Boolean(id && id !== viewerId));
     viewer.control.send({ type: 'share-approved', participants });
     return;
   }
@@ -458,7 +404,7 @@ function handleViewerData(viewerId: string, value: unknown) {
 }
 
 async function startRoomPresentation() {
-  if (localPresentation || session.ended || !peer?.id || !session.beginPresentation()) return;
+  if (localPresentation || session.ended || !signaling?.participantId || !session.beginPresentation()) return;
   updateRoomUI();
   setShareAudioControlsDisabled(true);
   try {
@@ -473,7 +419,7 @@ async function startRoomPresentation() {
 }
 
 async function beginLocalPresentation(stream: MediaStream) {
-  if (!peer?.id) throw new Error('The room connection is not ready.');
+  if (!signaling?.participantId || !mesh) throw new Error('The room connection is not ready.');
   try {
     localPresentation = createTextPresentation(stream, currentStreamSettings);
   } catch (error) {
@@ -484,6 +430,7 @@ async function beginLocalPresentation(stream: MediaStream) {
   upsertPresenter(presenter);
   attachLocalPreview(stream, presenter.id);
   await localPresentation.start();
+  await mesh.setAudioTrack(localAudioTracks()[0] ?? null);
 
   if (session.isHost) {
     session.finishPresentation();
@@ -504,7 +451,7 @@ async function beginLocalPresentation(stream: MediaStream) {
 
 function localPresenterInfo(): PresenterInfo {
   return {
-    id: peer?.id || '',
+    id: signaling?.participantId || '',
     name: session.isHost ? 'Host' : session.viewerName || 'You',
     isHost: session.isHost,
     audioEnabled: localAudioTracks().some((track) => track.enabled),
@@ -518,8 +465,9 @@ function connectLocalStreamToParticipants(participantIds: string[]) {
 }
 
 function connectLocalStreamTo(participantId: string) {
-  if (!peer || !localPresentation) return;
-  localPresentation.connect(peer, participantId, localPresenterInfo(), admission.localMediaToken);
+  const channel = mesh?.peer(participantId)?.screen;
+  if (!channel || !localPresentation) return;
+  localPresentation.connect(participantId, channel);
   updateBandwidthEstimate();
 }
 
@@ -528,50 +476,31 @@ function disconnectLocalStreamFrom(participantId: string) {
   updateBandwidthEstimate();
 }
 
-function acceptTextStream(connection: DataConnection) {
-  const presenter = parsePresenter(connection.metadata?.presenter, session.hostId);
-  if (!admission.isAuthorized(connection.peer, connection.metadata?.mediaToken)
-    || !presenter || presenter.id !== connection.peer || presenter.id === peer?.id) return connection.close();
-  upsertPresenter(presenter);
-  incomingTextConnections.get(presenter.id)?.close();
-  incomingTextConnections.set(presenter.id, connection);
-  const canvas = streamCardMedia<HTMLCanvasElement>(presenter.id, 'canvas');
-  if (!canvas) return connection.close();
-  new TextStreamReceiver(canvas, connection, () => setCardConnected(presenter.id));
+function attachIncomingTextStream(presenterId: string) {
+  if (presenterId === signaling?.participantId || incomingTextReceivers.has(presenterId) || !presenters.has(presenterId)) return;
+  const connection = peerChannels.get(presenterId)?.screen;
+  const canvas = streamCardMedia<HTMLCanvasElement>(presenterId, 'canvas');
+  if (!connection || !canvas) return;
+  const receiver = new TextStreamReceiver(canvas, connection, () => setCardConnected(presenterId));
+  incomingTextReceivers.set(presenterId, receiver);
   connection.on('close', () => {
-    if (incomingTextConnections.get(presenter.id) === connection) incomingTextConnections.delete(presenter.id);
+    if (incomingTextReceivers.get(presenterId) === receiver) incomingTextReceivers.delete(presenterId);
   });
 }
 
-function receiveAudioCall(call: MediaConnection) {
-  const presenter = parsePresenter(call.metadata?.presenter, session.hostId);
-  if (call.metadata?.role !== 'presenter-audio'
-    || !admission.isAuthorized(call.peer, call.metadata?.mediaToken)
-    || !presenter || presenter.id !== call.peer || presenter.id === peer?.id) {
-    call.close();
-    return;
-  }
-  upsertPresenter(presenter);
-  incomingAudioCalls.get(presenter.id)?.close();
-  incomingAudioCalls.set(presenter.id, call);
-  call.answer();
-  call.on('stream', (stream) => {
-    const audio = remoteAudioElements.get(presenter.id) || document.createElement('audio');
-    audio.autoplay = true;
-    audio.srcObject = stream;
-    audio.muted = mutedPresenters.has(presenter.id);
-    remoteAudioElements.set(presenter.id, audio);
-    void audio.play().catch(() => showToast(`Click ${presenter.name}’s mute button to enable audio.`));
-  });
-  call.on('close', () => closeIncomingAudio(presenter.id, call));
-  call.on('error', () => closeIncomingAudio(presenter.id, call));
+function receiveAudioTrack(peerId: string, track: MediaStreamTrack, streams: readonly MediaStream[]) {
+  if (track.kind !== 'audio' || peerId === signaling?.participantId) return;
+  const audio = remoteAudioElements.get(peerId) || document.createElement('audio');
+  audio.autoplay = true;
+  audio.srcObject = streams[0] ?? new MediaStream([track]);
+  audio.muted = mutedPresenters.has(peerId);
+  remoteAudioElements.set(peerId, audio);
+  const name = presenters.get(peerId)?.name ?? 'participant';
+  void audio.play().catch(() => showToast(`Click ${name}’s mute button to enable audio.`));
+  track.addEventListener('ended', () => closeIncomingAudio(peerId), { once: true });
 }
 
-function closeIncomingAudio(presenterId: string, expected?: MediaConnection) {
-  const call = incomingAudioCalls.get(presenterId);
-  if (!call || (expected && call !== expected)) return;
-  incomingAudioCalls.delete(presenterId);
-  call.close();
+function closeIncomingAudio(presenterId: string) {
   const audio = remoteAudioElements.get(presenterId);
   if (audio) audio.srcObject = null;
   remoteAudioElements.delete(presenterId);
@@ -579,8 +508,9 @@ function closeIncomingAudio(presenterId: string, expected?: MediaConnection) {
 
 function stopLocalPresentation() {
   if (!localPresentation) return;
-  const presenterId = peer?.id;
+  const presenterId = signaling?.participantId;
   disposeLocalPresentation();
+  void mesh?.setAudioTrack(null);
   session.finishPresentation();
   if (presenterId) removePresenter(presenterId);
 
@@ -637,13 +567,14 @@ function toggleLocalAudio() {
 function upsertPresenter(presenter: PresenterInfo) {
   presenters.set(presenter.id, presenter);
   renderStreamCard(presenter);
+  attachIncomingTextStream(presenter.id);
   updateStreamGrid();
 }
 
 function removePresenter(presenterId: string) {
   presenters.delete(presenterId);
-  incomingTextConnections.get(presenterId)?.close();
-  incomingTextConnections.delete(presenterId);
+  incomingTextReceivers.get(presenterId)?.close();
+  incomingTextReceivers.delete(presenterId);
   closeIncomingAudio(presenterId);
   mutedPresenters.delete(presenterId);
   streamGrid.querySelector(`[data-presenter-id="${CSS.escape(presenterId)}"]`)?.remove();
@@ -652,7 +583,7 @@ function removePresenter(presenterId: string) {
 
 function renderStreamCard(presenter: PresenterInfo) {
   let card = streamGrid.querySelector<HTMLElement>(`[data-presenter-id="${CSS.escape(presenter.id)}"]`);
-  const isLocal = presenter.id === peer?.id;
+  const isLocal = presenter.id === signaling?.participantId;
   if (!card) {
     card = document.createElement('article');
     card.className = 'stream-card connecting';
@@ -710,7 +641,7 @@ function setCardConnected(presenterId: string) {
 }
 
 function toggleRemoteMute(presenterId: string) {
-  if (presenterId === peer?.id) return;
+  if (presenterId === signaling?.participantId) return;
   if (mutedPresenters.has(presenterId)) mutedPresenters.delete(presenterId);
   else mutedPresenters.add(presenterId);
   const audio = remoteAudioElements.get(presenterId);
@@ -724,7 +655,7 @@ function toggleRemoteMute(presenterId: string) {
 function updateMuteButton(presenterId: string) {
   const button = streamGrid.querySelector<HTMLButtonElement>(`[data-presenter-id="${CSS.escape(presenterId)}"] .stream-mute`);
   if (!button) return;
-  const isLocal = presenterId === peer?.id;
+  const isLocal = presenterId === signaling?.participantId;
   const muted = isLocal || mutedPresenters.has(presenterId);
   button.classList.toggle('muted', muted);
   button.disabled = isLocal;
@@ -780,12 +711,13 @@ function broadcastParticipantCount() {
   broadcast({ type: 'participant-count', participantCount: hostConnections.size + 1 });
 }
 
-function removeViewer(viewerId: string, expectedConnection?: DataConnection) {
+function removeViewer(viewerId: string, expectedConnection?: RtcChannel) {
   const viewer = hostConnections.get(viewerId);
   if (!viewer || (expectedConnection && viewer.control !== expectedConnection)) return;
   hostConnections.delete(viewerId);
-  admission.revoke(viewerId);
+  peerChannels.delete(viewerId);
   viewer.control.close();
+  if (mesh?.peer(viewerId)) mesh.closePeer(viewerId);
   disconnectLocalStreamFrom(viewerId);
   if (presenters.has(viewerId)) {
     removePresenter(viewerId);
@@ -795,6 +727,19 @@ function removeViewer(viewerId: string, expectedConnection?: DataConnection) {
   for (const { control } of hostConnections.values()) control.send({ type: 'participant-left', peerId: viewerId });
   announceSystem(viewer.name, 'left the room.', 'left');
   broadcastParticipantCount();
+}
+
+function handlePeerClosed(peerId: string) {
+  peerChannels.delete(peerId);
+  incomingTextReceivers.get(peerId)?.close();
+  incomingTextReceivers.delete(peerId);
+  closeIncomingAudio(peerId);
+  if (session.isHost) removeViewer(peerId);
+  else if (peerId === session.hostId) endViewer('The room is no longer available.');
+  else {
+    disconnectLocalStreamFrom(peerId);
+    if (presenters.has(peerId)) removePresenter(peerId);
+  }
 }
 
 async function setQuality(name: QualityName) {
@@ -927,7 +872,7 @@ function appendChatMessage(message: ChatMessage, playSound = true) {
   const container = room.querySelector<HTMLElement>('[data-chat-messages]');
   if (!container || container.querySelector(`[data-message-id="${CSS.escape(message.id)}"]`)) return;
   container.querySelector('[data-chat-empty]')?.remove();
-  const isOwn = session.isHost ? message.sender === 'host' : message.senderId === peer?.id;
+  const isOwn = session.isHost ? message.sender === 'host' : message.senderId === signaling?.participantId;
   const article = document.createElement('article');
   article.className = `chat-message${isOwn ? ' own' : ''}`;
   article.dataset.messageId = message.id;
@@ -1045,48 +990,42 @@ function playChatSound() {
   } catch {}
 }
 
-function reconnectPeer() {
-  if (peer && !peer.destroyed) {
-    try { peer.reconnect(); } catch {}
-  }
-}
-
-function handleHostPeerError(error: PeerError<string>) {
-  if (error.type === 'network' || error.type === 'server-error') showToast('The signaling connection was interrupted.', 'error');
-}
-
-function handleViewerPeerError(error: unknown) {
-  const type = peerErrorType(error);
-  endViewer(type === 'peer-unavailable' || type === 'unavailable-id' ? 'This room isn’t available.' : 'Could not connect to this room.');
-}
-
 function endViewer(message: string) {
   if (!session.end()) return;
   stopLocalPresentation();
-  for (const connection of incomingTextConnections.values()) connection.close();
-  incomingTextConnections.clear();
-  for (const call of incomingAudioCalls.values()) call.close();
-  incomingAudioCalls.clear();
-  viewerControl?.close();
-  viewerControl = undefined;
-  admission.reset();
+  disposeConnections();
   setChatEnabled(false);
   setRoomConnectionState('ended', message);
   $('#stream-button').disabled = true;
   showToast(message, 'error');
 }
 
-function leaveRoom() {
+async function leaveRoom() {
   if (session.isHost) {
     if (!window.confirm('Close this room for everyone?')) return;
     broadcast({ type: 'room-closed' });
     for (const { control } of hostConnections.values()) control.close();
     hostConnections.clear();
+    await signaling?.closeRoom().catch(() => {});
+  } else {
+    await signaling?.leave().catch(() => {});
   }
   disposeLocalPresentation();
-  admission.reset();
-  peer?.destroy();
+  disposeConnections();
   location.href = appPath();
+}
+
+function disposeConnections() {
+  viewerControl = undefined;
+  signaling?.stop();
+  signaling = undefined;
+  mesh?.close();
+  mesh = undefined;
+  peerChannels.clear();
+  for (const receiver of incomingTextReceivers.values()) receiver.close();
+  incomingTextReceivers.clear();
+  for (const audio of remoteAudioElements.values()) audio.srcObject = null;
+  remoteAudioElements.clear();
 }
 
 async function copyText(value: string, confirmation: string) {
@@ -1111,12 +1050,17 @@ function setShareAudioControlsDisabled(disabled: boolean) {
   document.querySelectorAll<HTMLInputElement>('[data-share-audio]').forEach((input) => { input.disabled = disabled; });
 }
 
-function peerErrorType(error: unknown) {
-  return error && typeof error === 'object' && 'type' in error && typeof error.type === 'string' ? error.type : undefined;
-}
-
 function errorName(error: unknown) {
   return error instanceof Error ? error.name : undefined;
+}
+
+function optionalInputValue(selector: string) {
+  return document.querySelector<HTMLInputElement>(selector)?.value ?? '';
+}
+
+function selectedRoomLimit() {
+  const selected = Number.parseInt(optionalInputValue('#room-limit'), 10);
+  return Number.isSafeInteger(selected) ? Math.min(maxParticipants, Math.max(2, selected)) : maxParticipants;
 }
 
 function errorMessage(error: unknown, fallback: string) {
@@ -1126,7 +1070,7 @@ function errorMessage(error: unknown, fallback: string) {
 $('#share-button').addEventListener('click', startSharing);
 $('#stream-button').addEventListener('click', () => localPresentation ? stopLocalPresentation() : startRoomPresentation());
 $('#local-audio-button').addEventListener('click', toggleLocalAudio);
-$('#leave-room-button').addEventListener('click', leaveRoom);
+$('#leave-room-button').addEventListener('click', () => void leaveRoom());
 $('#copy-room-code').addEventListener('click', () => void copyText(session.roomId, 'Room code copied.'));
 $('#copy-invite-button').addEventListener('click', () => void copyText(`${location.origin}${appPath(`room/${session.roomId}`)}`, 'Invite link copied.'));
 
@@ -1163,7 +1107,8 @@ $('#join-form').addEventListener('submit', (event) => {
   event.preventDefault();
   const id = normalizeRoomCode($('#room-code').value);
   if (!id) return showToast('Enter a valid room code.', 'error');
-  location.href = appPath(`room/${id}`);
+  history.replaceState({}, '', appPath(`room/${id}`));
+  void joinRoom(id, optionalInputValue('#join-password'));
 });
 
 const relativePath = location.pathname.startsWith(appBasePath)

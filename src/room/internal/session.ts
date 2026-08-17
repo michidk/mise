@@ -27,13 +27,13 @@ export class RoomSession {
   get isHost() { return this.current.role === 'host'; }
   get ended() { return this.current.connection === 'ended'; }
 
-  startHosting(roomId: string) {
+  startHosting(roomId: string, hostId = roomId) {
     this.current = {
       ...INITIAL_STATE,
       role: 'host',
       connection: 'connecting',
       roomId,
-      hostId: roomId,
+      hostId,
     };
   }
 
@@ -43,9 +43,15 @@ export class RoomSession {
       role: 'viewer',
       connection: 'connecting',
       roomId,
-      hostId: roomId,
+      hostId: '',
       participantCount: 0,
     };
+  }
+
+  setLocalPeer(_localPeerId: string, hostId: string) {
+    if (this.current.role !== 'viewer' || this.ended || !hostId) return false;
+    this.current = { ...this.current, hostId };
+    return true;
   }
 
   markLive(details: { viewerName?: string; hostId?: string } = {}) {

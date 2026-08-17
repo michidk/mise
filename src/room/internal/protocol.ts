@@ -5,11 +5,9 @@ import type {
   ChatEntry,
   ChatMessage,
   HostRoomMessage,
-  MediaCredential,
   PresenterInfo,
   ViewerRoomMessage,
 } from '../types.js';
-import { validMediaToken } from './admission.js';
 
 const ACTIVITY_KINDS = new Set<ActivityKind>(['joined', 'left', 'stream-started', 'stream-stopped', 'audio', 'settings']);
 
@@ -23,14 +21,9 @@ export function parseHostRoomMessage(value: unknown, hostId: string): HostRoomMe
     case 'accepted': {
       const name = boundedString(message.name, 40);
       const acceptedHostId = peerId(message.hostId);
-      const participants = parseCredentials(message.participants);
-      return name && acceptedHostId && validMediaToken(message.mediaToken) && participants
-        ? { type: 'accepted', name, hostId: acceptedHostId, mediaToken: message.mediaToken, participants }
+      return name && acceptedHostId
+        ? { type: 'accepted', name, hostId: acceptedHostId }
         : undefined;
-    }
-    case 'participant-authorized': {
-      const participant = parseCredential(message.participant);
-      return participant ? { type: 'participant-authorized', participant } : undefined;
     }
     case 'chat-history':
       return Array.isArray(message.messages)
@@ -133,23 +126,6 @@ export function parseTextSettings(value: unknown): TextCodecSettings | undefined
 
 function parseChatEntry(value: unknown): ChatEntry | undefined {
   return parseChatMessage(value) ?? parseChatActivity(value);
-}
-
-function parseCredentials(value: unknown): MediaCredential[] | undefined {
-  if (!Array.isArray(value) || value.length > 100) return undefined;
-  const credentials = value.map(parseCredential);
-  if (credentials.some((credential) => !credential)) return undefined;
-  const result = credentials as MediaCredential[];
-  return new Set(result.map(({ peerId: id }) => id)).size === result.length ? result : undefined;
-}
-
-function parseCredential(value: unknown): MediaCredential | undefined {
-  const credential = record(value);
-  if (!credential) return undefined;
-  const credentialPeerId = peerId(credential.peerId);
-  return credentialPeerId && validMediaToken(credential.mediaToken)
-    ? { peerId: credentialPeerId, mediaToken: credential.mediaToken }
-    : undefined;
 }
 
 function parseChatMessage(value: unknown): ChatMessage | undefined {

@@ -9,7 +9,6 @@
     <base href="/" />
     <link rel="icon" href="favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="styles.css" />
-    <script src="vendor/peerjs.min.js"></script>
     <script src="app.js" type="module"></script>
   </head>
   <body>
@@ -43,11 +42,17 @@
               <span class="audio-switch" aria-hidden="true"><i></i></span>
               <span>Share audio</span>
             </label>
+            <div class="room-create-options">
+              <label><span>Password</span><input id="room-password" type="password" maxlength="128" autocomplete="new-password" placeholder="Optional" /></label>
+              <label><span>People</span><input id="room-limit" type="number" min="2" max="6" value="6" inputmode="numeric" /></label>
+            </div>
           </div>
           <span class="action-or">or</span>
           <form id="join-form" class="join-form">
             <label class="sr-only" for="room-code">Room code</label>
             <input id="room-code" autocomplete="off" spellcheck="false" placeholder="Enter a room code" maxlength="32" />
+            <label class="sr-only" for="join-password">Room password</label>
+            <input id="join-password" type="password" autocomplete="current-password" placeholder="Password (if set)" maxlength="128" />
             <button type="submit" aria-label="Join room">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
             </button>

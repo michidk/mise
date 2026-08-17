@@ -130,6 +130,10 @@ h1, h2, p { margin-top: 0; }
 
 .hero-actions { display: flex; align-items: center; gap: 13px; }
 .share-start { display: flex; flex-direction: column; align-items: stretch; gap: 9px; }
+.room-create-options { display: grid; grid-template-columns: 1fr 72px; gap: 7px; }
+.room-create-options label { min-width: 0; display: flex; flex-direction: column; gap: 3px; color: #777980; font-size: 8px; font-weight: 750; letter-spacing: .06em; text-transform: uppercase; }
+.room-create-options input { width: 100%; height: 31px; padding: 0 8px; border: 1px solid var(--line); border-radius: 8px; outline: 0; color: var(--ink); background: rgba(255,255,255,.68); font-size: 10px; text-transform: none; }
+.room-create-options input:focus { border-color: rgba(49,88,245,.55); box-shadow: 0 0 0 3px rgba(49,88,245,.07); }
 
 .audio-option { display: inline-flex; align-items: center; justify-content: center; gap: 8px; color: #6c6e75; font-size: 11px; font-weight: 700; cursor: pointer; user-select: none; }
 .audio-option input { width: 1px; height: 1px; position: absolute; opacity: 0; pointer-events: none; }
@@ -169,7 +173,7 @@ h1, h2, p { margin-top: 0; }
 
 .join-form {
   height: 50px;
-  width: 201px;
+  width: 340px;
   display: flex;
   align-items: center;
   border: 1px solid var(--line);
@@ -180,6 +184,7 @@ h1, h2, p { margin-top: 0; }
 
 .join-form:focus-within { border-color: rgba(49,88,245,.6); background: white; box-shadow: 0 0 0 4px rgba(49,88,245,.08); }
 .join-form input { width: 100%; min-width: 0; padding: 0 0 0 15px; border: 0; outline: 0; color: var(--ink); background: transparent; font-size: 13px; }
+.join-form input + input { border-left: 1px solid var(--line); }
 .join-form input::placeholder { color: #92928f; }
 .join-form button { width: 45px; height: 100%; padding: 0; display: grid; place-items: center; flex: 0 0 auto; border: 0; background: transparent; cursor: pointer; color: var(--blue); }
 .join-form svg { width: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }

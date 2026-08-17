@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { DataConnection } from 'peerjs';
+import type { RtcChannel } from '../src/rtc/index.js';
 import {
   TEXT_TRANSPORT_LIMITS,
   TextStreamBroadcaster,
@@ -14,15 +14,14 @@ import {
 
 type Listener = (...arguments_: any[]) => void;
 
-class FakeConnection {
+class FakeConnection implements RtcChannel {
   readonly sent: unknown[] = [];
-  readonly dataChannel = { bufferedAmount: 0 };
   readonly listeners = new Map<string, Set<Listener>>();
   open = true;
-  bufferSize = 0;
+  bufferedAmount = 0;
   closeCount = 0;
 
-  constructor(readonly peer = 'peer-1') {}
+  constructor(readonly peerId = 'peer-1') {}
 
   on(event: string, listener: Listener) {
     const listeners = this.listeners.get(event) ?? new Set();
@@ -52,11 +51,7 @@ class FakeConnection {
   }
 
   receive(value: unknown) {
-    this.emit('data', value);
-  }
-
-  asDataConnection() {
-    return this as unknown as DataConnection;
+    this.emit('message', value);
   }
 }
 
@@ -70,17 +65,17 @@ class RecordingRenderer implements MediaRenderer<RenderableTextFrame> {
 
 test('broadcaster drops a backpressured frame and requests a repair keyframe', () => {
   const connection = new FakeConnection();
-  connection.dataChannel.bufferedAmount = TEXT_TRANSPORT_LIMITS.bufferedBytes + 1;
+  connection.bufferedAmount = TEXT_TRANSPORT_LIMITS.bufferedBytes + 1;
   let keyframeRequests = 0;
   const broadcaster = new TextStreamBroadcaster(() => { keyframeRequests += 1; });
-  broadcaster.add(connection.asDataConnection());
+  broadcaster.add(connection);
 
   broadcaster.send(encodedFrame(1, false));
 
   assert.equal(keyframeRequests, 1);
   assert.deepEqual(connection.sent, []);
 
-  connection.dataChannel.bufferedAmount = 0;
+  connection.bufferedAmount = 0;
   broadcaster.send(encodedFrame(2, true));
   assert.equal((connection.sent[0] as TextFrameStartPacket).type, 'text-frame-start');
   assert.equal((connection.sent[1] as TextFrameChunkPacket).type, 'text-frame-chunk');
@@ -90,7 +85,7 @@ test('receiver ignores deltas after a frame gap until a keyframe repairs the str
   const connection = new FakeConnection();
   const renderer = new RecordingRenderer();
   let firstFrames = 0;
-  new TextStreamReceiver(renderer, connection.asDataConnection(), () => { firstFrames += 1; });
+  new TextStreamReceiver(renderer, connection, () => { firstFrames += 1; });
 
   sendFrame(connection, 1, true);
   await settle();
@@ -116,7 +111,7 @@ test('receiver serializes asynchronous frame rendering', async () => {
       if (frame.frameId === 1) await firstRender;
     },
   };
-  new TextStreamReceiver(renderer, connection.asDataConnection(), () => {});
+  new TextStreamReceiver(renderer, connection, () => {});
 
   sendFrame(connection, 1, true);
   sendFrame(connection, 2, false);
@@ -131,7 +126,7 @@ test('receiver serializes asynchronous frame rendering', async () => {
 test('receiver closes a peer after repeated oversized packets', () => {
   const connection = new FakeConnection();
   const renderer = new RecordingRenderer();
-  new TextStreamReceiver(renderer, connection.asDataConnection(), () => {});
+  new TextStreamReceiver(renderer, connection, () => {});
   const oversized = {
     type: 'text-frame-chunk',
     frameId: 1,

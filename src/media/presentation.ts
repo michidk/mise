@@ -1,4 +1,4 @@
-import type { MediaConnection, Peer as PeerInstance } from 'peerjs';
+import type { RtcChannel } from '../rtc/index.js';
 import { LosslessTextEncoder, type TextCodecSettings } from './text-lossless.js';
 import { TextStreamBroadcaster } from './text-transport.js';
 
@@ -7,7 +7,7 @@ export interface TextPresentation {
   readonly videoTrack: MediaStreamTrack | undefined;
   start(): Promise<void>;
   updateSettings(settings: TextCodecSettings): void;
-  connect(peer: PeerInstance, participantId: string, presenter: object, mediaToken: string): void;
+  connect(participantId: string, channel: RtcChannel): void;
   disconnect(participantId: string): void;
   hasConnection(participantId: string): boolean;
   audioTracks(): MediaStreamTrack[];
@@ -22,7 +22,6 @@ export function createTextPresentation(stream: MediaStream, settings: TextCodecS
 class BrowserTextPresentation implements TextPresentation {
   private readonly broadcaster: TextStreamBroadcaster;
   private readonly encoder: LosslessTextEncoder;
-  private readonly outgoingAudioCalls = new Map<string, MediaConnection>();
   private stopped = false;
 
   constructor(readonly stream: MediaStream, settings: TextCodecSettings) {
@@ -43,36 +42,14 @@ class BrowserTextPresentation implements TextPresentation {
     if (!this.stopped) this.encoder.updateSettings(settings);
   }
 
-  connect(peer: PeerInstance, participantId: string, presenter: object, mediaToken: string) {
-    if (this.stopped || !mediaToken || participantId === peer.id || this.broadcaster.has(participantId)) return;
-    const textConnection = peer.connect(participantId, {
-      label: `text-${peer.id}`,
-      metadata: { role: 'text-stream', presenter, mediaToken },
-      serialization: 'binary',
-      reliable: true,
-    });
-    this.broadcaster.add(textConnection);
-    textConnection.on('open', () => this.encoder.requestKeyframe());
-
-    const audioTracks = this.audioTracks();
-    if (!audioTracks.length) return;
-    const call = peer.call(participantId, new MediaStream(audioTracks), {
-      metadata: { role: 'presenter-audio', presenter, mediaToken },
-    });
-    this.outgoingAudioCalls.get(participantId)?.close();
-    this.outgoingAudioCalls.set(participantId, call);
-    const remove = () => {
-      if (this.outgoingAudioCalls.get(participantId) === call) this.outgoingAudioCalls.delete(participantId);
-    };
-    call.on('close', remove);
-    call.on('error', remove);
+  connect(participantId: string, channel: RtcChannel) {
+    if (this.stopped || this.broadcaster.has(participantId)) return;
+    this.broadcaster.add(channel);
+    if (channel.open) this.encoder.requestKeyframe();
   }
 
   disconnect(participantId: string) {
-    this.broadcaster.remove(participantId);
-    const call = this.outgoingAudioCalls.get(participantId);
-    this.outgoingAudioCalls.delete(participantId);
-    call?.close();
+    this.broadcaster.remove(participantId, false);
   }
 
   hasConnection(participantId: string) {
@@ -91,9 +68,7 @@ class BrowserTextPresentation implements TextPresentation {
     if (this.stopped) return;
     this.stopped = true;
     this.encoder.stop();
-    this.broadcaster.close();
-    for (const call of this.outgoingAudioCalls.values()) call.close();
-    this.outgoingAudioCalls.clear();
+    this.broadcaster.close(false);
     for (const track of this.stream.getTracks()) {
       track.onended = null;
       track.stop();

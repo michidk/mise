@@ -5,7 +5,6 @@ import assert from 'node:assert/strict';
 
 let app;
 let baseUrl;
-let brokerUrl;
 
 const getAvailablePort = () => new Promise((resolve, reject) => {
   const probe = net.createServer();
@@ -25,30 +24,19 @@ const waitForOutput = (stream, expected) => new Promise((resolve, reject) => {
   });
 });
 
-const connectBrokerClient = (id) => new Promise((resolve, reject) => {
-  const socket = new WebSocket(`${brokerUrl}?key=peerjs&id=${id}&token=${id}-token`);
-  const timeout = setTimeout(() => reject(new Error(`PeerServer did not open ${id}`)), 3_000);
-  socket.addEventListener('message', (event) => {
-    if (JSON.parse(event.data).type !== 'OPEN') return;
-    clearTimeout(timeout);
-    resolve(socket);
-  });
-  socket.addEventListener('error', reject, { once: true });
-});
-
-const nextBrokerMessage = (socket) => new Promise((resolve, reject) => {
-  const timeout = setTimeout(() => reject(new Error('Timed out waiting for a relayed message')), 3_000);
-  socket.addEventListener('message', (event) => {
-    clearTimeout(timeout);
-    resolve(JSON.parse(event.data));
-  }, { once: true });
-});
+const roomRequest = async (pathname, { identity, ...init } = {}) => {
+  const headers = { 'Content-Type': 'application/json', ...init.headers };
+  if (identity) {
+    headers.Authorization = `Bearer ${identity.participantToken}`;
+    headers['X-Participant-Id'] = identity.participant.id;
+  }
+  return fetch(`${baseUrl}/api/rooms${pathname}`, { ...init, headers });
+};
 
 before(async () => {
   const port = await getAvailablePort();
   baseUrl = `http://127.0.0.1:${port}`;
-  brokerUrl = `ws://127.0.0.1:${port}/peerjs/peerjs`;
-  app = spawn(process.execPath, ['server.ts'], {
+  app = spawn(process.execPath, ['--import', 'tsx', 'server.ts'], {
     cwd: new URL('..', import.meta.url),
     env: {
       ...process.env,
@@ -69,14 +57,13 @@ test('serves the app and public client configuration', async () => {
   const configResponse = await fetch(`${baseUrl}/config`);
   const config = await configResponse.json();
   const favicon = await fetch(`${baseUrl}/favicon.svg`);
-  const client = await fetch(`${baseUrl}/vendor/peerjs.min.js`);
   const appClient = await fetch(`${baseUrl}/app.js`);
   const appClientSource = await appClient.text();
   const landing = await fetch(`${baseUrl}/`);
   const room = await fetch(`${baseUrl}/room/abc12345`);
 
   assert.deepEqual(health, { ok: true });
-  assert.equal(config.maxViewers, 5);
+  assert.equal(config.maxParticipants, 6);
   assert.deepEqual(config.iceServers, [{
     urls: ['stun:main.lohr.dev:3478', 'stun:stun.l.google.com:19302'],
   }]);
@@ -88,9 +75,9 @@ test('serves the app and public client configuration', async () => {
     const candidates = Array.isArray(urls) ? urls : [urls];
     return candidates.every((url) => url.startsWith('stun:'));
   }));
-  assert.equal(client.status, 200);
-  assert.match(client.headers.get('content-type'), /javascript/);
   assert.match(appClientSource, /getDisplayMedia/);
+  assert.match(appClientSource, /RTCPeerConnection/);
+  assert.doesNotMatch(appClientSource, /PeerJS/);
   assert.match(appClientSource, /text-lossless-v1/);
   assert.match(appClientSource, /text-frame-start/);
   assert.match(appClientSource, /text-frame-chunk/);
@@ -119,24 +106,68 @@ test('serves the app and public client configuration', async () => {
   assert.match(page, /href="https:\/\/github\.com\/michidk\/mise"/);
 });
 
-test('PeerServer registers IDs and relays negotiation messages', async () => {
-  const host = await connectBrokerClient('test-host');
-  const viewer = await connectBrokerClient('test-viewer');
-  const relayed = nextBrokerMessage(viewer);
-
-  host.send(JSON.stringify({
-    type: 'OFFER',
-    dst: 'test-viewer',
-    payload: { marker: 'screen-offer' },
-  }));
-
-  assert.deepEqual(await relayed, {
-    type: 'OFFER',
-    src: 'test-host',
-    dst: 'test-viewer',
-    payload: { marker: 'screen-offer' },
+test('room API enforces passwords and participant limits', async () => {
+  const createdResponse = await roomRequest('', {
+    method: 'POST',
+    body: JSON.stringify({ password: 'correct horse', maxParticipants: 2 }),
   });
+  assert.equal(createdResponse.status, 201);
+  const host = await createdResponse.json();
 
-  host.close();
-  viewer.close();
+  const missingPassword = await roomRequest(`/${host.roomId}/join`, { method: 'POST', body: '{}' });
+  assert.equal(missingPassword.status, 401);
+  assert.equal((await missingPassword.json()).error.code, 'password-required');
+
+  const wrongPassword = await roomRequest(`/${host.roomId}/join`, {
+    method: 'POST',
+    body: JSON.stringify({ password: 'wrong' }),
+  });
+  assert.equal(wrongPassword.status, 401);
+  assert.equal((await wrongPassword.json()).error.code, 'invalid-password');
+
+  const joinedResponse = await roomRequest(`/${host.roomId}/join`, {
+    method: 'POST',
+    body: JSON.stringify({ password: 'correct horse' }),
+  });
+  assert.equal(joinedResponse.status, 201);
+  const viewer = await joinedResponse.json();
+  assert.equal(viewer.hostId, host.hostId);
+  assert.deepEqual(viewer.participants.map(({ id }) => id), [host.participant.id]);
+
+  const fullResponse = await roomRequest(`/${host.roomId}/join`, {
+    method: 'POST',
+    body: JSON.stringify({ password: 'correct horse' }),
+  });
+  assert.equal(fullResponse.status, 409);
+  assert.equal((await fullResponse.json()).error.code, 'room-full');
+});
+
+test('room API relays authenticated WebRTC signaling through a durable mailbox', async () => {
+  const host = await roomRequest('', {
+    method: 'POST',
+    body: JSON.stringify({ maxParticipants: 3 }),
+  }).then((response) => response.json());
+  const viewer = await roomRequest(`/${host.roomId}/join`, {
+    method: 'POST',
+    body: '{}',
+  }).then((response) => response.json());
+
+  const offer = { type: 'offer', sdp: 'test-sdp' };
+  const sendResponse = await roomRequest(`/${host.roomId}/signals`, {
+    identity: viewer,
+    method: 'POST',
+    body: JSON.stringify({ recipientId: host.participant.id, kind: 'description', payload: offer }),
+  });
+  assert.equal(sendResponse.status, 202);
+
+  const batchResponse = await roomRequest(`/${host.roomId}/signals?after=0`, { identity: host });
+  assert.equal(batchResponse.status, 200);
+  const batch = await batchResponse.json();
+  assert.equal(batch.signals.length, 1);
+  assert.equal(batch.signals[0].senderId, viewer.participant.id);
+  assert.equal(batch.signals[0].recipientId, host.participant.id);
+  assert.deepEqual(batch.signals[0].payload, offer);
+
+  const unauthorized = await roomRequest(`/${host.roomId}/signals?after=0`);
+  assert.equal(unauthorized.status, 401);
 });

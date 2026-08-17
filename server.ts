@@ -3,25 +3,30 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
-import { ExpressPeerServer } from 'peer';
+import { createRoomApi } from './src/room-api/index.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || '0.0.0.0';
-const MAX_VIEWERS = Number(process.env.MAX_VIEWERS || 5);
+const configuredMaximum = Number(process.env.MAX_PARTICIPANTS || process.env.MAX_VIEWERS || 6);
+const MAX_PARTICIPANTS = Number.isSafeInteger(configuredMaximum)
+  ? Math.min(20, Math.max(2, configuredMaximum))
+  : 6;
 const BASE_PATH = normalizeBasePath(process.env.BASE_PATH);
 const publicDirectory = path.join(__dirname, 'public');
 const indexHtml = readFileSync(path.join(publicDirectory, 'index.html'), 'utf8');
 const landingHtml = indexHtml.replace('<base href="/" />', '<base href="./" />');
 const roomHtml = indexHtml.replace('<base href="/" />', '<base href="../" />');
 
+if (process.env.VERCEL && !process.env.DATABASE_URL) {
+  throw new Error('DATABASE_URL is required for shared room signaling on Vercel.');
+}
+
 const app = express();
 const server = http.createServer(app);
-const peerServer = ExpressPeerServer(server, {
-  path: '/',
-  proxied: true,
-  allow_discovery: false,
-  alive_timeout: 60_000,
+const roomApi = createRoomApi({
+  databaseUrl: process.env.DATABASE_URL,
+  maximumParticipants: MAX_PARTICIPANTS,
 });
 
 app.disable('x-powered-by');
@@ -35,7 +40,7 @@ app.use((_, response, next) => {
   next();
 });
 
-app.use(route('/peerjs'), peerServer);
+app.use(route('/api/rooms'), express.json({ limit: '192kb' }), roomApi.router);
 
 app.get(route('/health'), (_, response) => response.json({ ok: true }));
 app.get(route('/config'), (_, response) => {
@@ -46,11 +51,7 @@ app.get(route('/config'), (_, response) => {
   const iceServers = stunUrls.length ? [{ urls: stunUrls }] : [];
 
   response.set('Cache-Control', 'private, no-store');
-  response.json({ iceServers, maxViewers: MAX_VIEWERS });
-});
-
-app.get(route('/vendor/peerjs.min.js'), (_, response) => {
-  response.sendFile(path.join(__dirname, 'node_modules', 'peerjs', 'dist', 'peerjs.min.js'));
+  response.json({ iceServers, maxParticipants: MAX_PARTICIPANTS });
 });
 
 app.use(BASE_PATH || '/', express.static(publicDirectory, {
@@ -70,8 +71,8 @@ if (!process.env.VERCEL) {
 export default server;
 
 function shutdown() {
-  server.close();
-  setTimeout(() => process.exit(0), 250).unref();
+  server.close(() => void roomApi.close().finally(() => process.exit(0)));
+  setTimeout(() => process.exit(0), 1_000).unref();
 }
 
 process.on('SIGINT', shutdown);

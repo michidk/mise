@@ -1,4 +1,4 @@
-import type { DataConnection } from 'peerjs';
+import type { RtcChannel } from '../rtc/index.js';
 import {
   LosslessTextRenderer,
   type EncodedTextFrame,
@@ -21,8 +21,9 @@ export const TEXT_TRANSPORT_LIMITS = {
 } as const;
 
 interface BroadcasterConnection {
-  connection: DataConnection;
+  connection: RtcChannel;
   repairPending: boolean;
+  detach(): void;
 }
 
 export class TextStreamBroadcaster {
@@ -30,17 +31,33 @@ export class TextStreamBroadcaster {
 
   constructor(private readonly onKeyframeRequested: () => void = () => {}) {}
 
-  add(connection: DataConnection) {
-    const entry = { connection, repairPending: false };
-    this.connections.set(connection.peer, entry);
+  add(connection: RtcChannel) {
+    const opened = () => this.onKeyframeRequested();
     const remove = () => {
-      if (this.connections.get(connection.peer)?.connection === connection) this.connections.delete(connection.peer);
+      const current = this.connections.get(connection.peerId);
+      if (current?.connection === connection) {
+        current.detach();
+        this.connections.delete(connection.peerId);
+      }
     };
-    connection.on('data', (value) => {
+    const receive = (value: unknown) => {
       if (!isKeyframeRequest(value)) return;
       entry.repairPending = false;
       this.onKeyframeRequested();
-    });
+    };
+    const entry: BroadcasterConnection = {
+      connection,
+      repairPending: false,
+      detach: () => {
+        connection.off('open', opened);
+        connection.off('message', receive);
+        connection.off('close', remove);
+        connection.off('error', remove);
+      },
+    };
+    this.connections.set(connection.peerId, entry);
+    connection.on('open', opened);
+    connection.on('message', receive);
     connection.on('close', remove);
     connection.on('error', remove);
   }
@@ -49,10 +66,11 @@ export class TextStreamBroadcaster {
     return this.connections.has(peerId);
   }
 
-  remove(peerId: string) {
+  remove(peerId: string, closeConnection = true) {
     const entry = this.connections.get(peerId);
     this.connections.delete(peerId);
-    entry?.connection.close();
+    entry?.detach();
+    if (closeConnection) entry?.connection.close();
   }
 
   send(frame: EncodedTextFrame) {
@@ -97,8 +115,11 @@ export class TextStreamBroadcaster {
     }
   }
 
-  close() {
-    for (const { connection } of this.connections.values()) connection.close();
+  close(closeConnections = true) {
+    for (const entry of this.connections.values()) {
+      entry.detach();
+      if (closeConnections) entry.connection.close();
+    }
     this.connections.clear();
   }
 
@@ -130,11 +151,11 @@ export class TextStreamReceiver {
 
   constructor(
     target: HTMLCanvasElement | MediaRenderer<RenderableTextFrame>,
-    private readonly connection: DataConnection,
+    private readonly connection: RtcChannel,
     private readonly onFirstFrame: () => void,
   ) {
     this.renderer = isFrameRenderer(target) ? target : new LosslessTextRenderer(target);
-    connection.on('data', this.receiveBound);
+    connection.on('message', this.receiveBound);
     connection.on('close', this.closeBound);
     connection.on('error', this.closeBound);
   }
@@ -144,7 +165,7 @@ export class TextStreamReceiver {
     this.closed = true;
     this.generation += 1;
     this.pending.clear();
-    this.connection.off('data', this.receiveBound);
+    this.connection.off('message', this.receiveBound);
     this.connection.off('close', this.closeBound);
     this.connection.off('error', this.closeBound);
   }
@@ -293,10 +314,8 @@ function validEncodedFrame(frame: EncodedTextFrame) {
     && frame.data.byteLength <= TEXT_TRANSPORT_LIMITS.compressedFrameBytes;
 }
 
-function isBackpressured(connection: DataConnection) {
-  const queuedMessages = (connection as DataConnection & { bufferSize?: number }).bufferSize ?? 0;
-  return queuedMessages > TEXT_TRANSPORT_LIMITS.queuedMessages
-    || connection.dataChannel.bufferedAmount > TEXT_TRANSPORT_LIMITS.bufferedBytes;
+function isBackpressured(connection: RtcChannel) {
+  return connection.bufferedAmount > TEXT_TRANSPORT_LIMITS.bufferedBytes;
 }
 
 function isFrameRenderer(target: HTMLCanvasElement | MediaRenderer<RenderableTextFrame>): target is MediaRenderer<RenderableTextFrame> {
