@@ -23,12 +23,20 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000). Screen capture works on `localhost`; a deployed instance must use HTTPS.
 
-Without `DATABASE_URL`, local development uses an in-memory room store. To exercise the production data path, set a PostgreSQL connection string and apply the schema first:
+Without `DATABASE_URL`, local development uses an in-memory room store. The PostgreSQL schema is defined with Drizzle ORM in `src/room-api/internal/schema.ts`, with generated migrations tracked in `drizzle/`. To exercise the production data path, set a PostgreSQL connection string and apply the migrations first:
 
 ```bash
 export DATABASE_URL='postgresql://...'
 npm run db:migrate
 npm run dev
+```
+
+After changing the schema, generate and validate a migration before applying it:
+
+```bash
+npm run db:generate
+npm run db:check
+npm run db:migrate
 ```
 
 ## Deploy to Vercel
@@ -70,7 +78,7 @@ The app is intentionally STUN-only and does not configure a TURN relay. Connecti
 - Stream audio is kept on a separate native WebRTC media track. Publishers can stop sending it without restarting the screen codec, and every receiver can mute each incoming stream independently.
 - Codec settings and stream ownership are room metadata. Cards show the host, current codec settings, and audio state without coupling the UI to the encoder implementation.
 - A host-coordinated activity log records joins, leaves, stream starts/stops, audio changes, and settings changes alongside chat. Only the latest 100 entries live in the host's browser memory.
-- `src/room-api/index.ts` is the server boundary for room admission and signaling storage. Its PostgreSQL and in-memory implementations remain internal.
+- `src/room-api/index.ts` is the server boundary for room admission and signaling storage. Its Drizzle/PostgreSQL and in-memory implementations remain internal.
 - `src/signaling/index.ts` is the browser boundary for REST room lifecycle, heartbeat, and signaling mailboxes.
 - `src/rtc/index.ts` owns native WebRTC negotiation, fixed control/screen channels, MessagePack serialization, and audio transceivers.
 - `src/media/index.ts` owns encoder, renderer, backpressure, and presentation cleanup. `src/room/index.ts` owns validated host/viewer messages and UI session state.
