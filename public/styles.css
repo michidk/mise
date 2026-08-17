@@ -145,8 +145,6 @@ h1, h2, p { margin-top: 0; }
 .room-create-options input, .room-field input { width: 100%; height: 42px; padding: 0 11px; border: 1px solid var(--line); border-radius: 10px; outline: 0; color: var(--ink); background: rgba(255,255,255,.88); font-size: 11px; font-weight: 550; letter-spacing: 0; text-transform: none; transition: border-color .2s, box-shadow .2s, background .2s; }
 .room-create-options input::placeholder, .room-field input::placeholder { color: #a1a19e; font-weight: 450; }
 .room-create-options input:focus, .room-field input:focus { border-color: rgba(49,88,245,.55); background: white; box-shadow: 0 0 0 3px rgba(49,88,245,.07); }
-.start-room-note { margin-top: 12px; padding: 9px 10px; display: flex; align-items: flex-start; gap: 7px; border-radius: 9px; color: #747783; background: rgba(49,88,245,.06); font-size: 8px; line-height: 1.45; }
-.start-room-note svg { width: 14px; flex: 0 0 auto; fill: none; stroke: var(--blue); stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 
 .audio-option { display: inline-flex; align-items: center; justify-content: center; gap: 8px; color: #6c6e75; font-size: 11px; font-weight: 700; cursor: pointer; user-select: none; }
 .audio-option input { width: 1px; height: 1px; position: absolute; opacity: 0; pointer-events: none; }
