@@ -42,7 +42,14 @@
             <p>Open a private room, then send the invite link.</p>
             <div class="room-create-options">
               <label><span>Password <small>Optional</small></span><input id="room-password" type="password" maxlength="128" autocomplete="new-password" placeholder="Add a password" /></label>
-              <label><span>People</span><input id="room-limit" type="number" min="2" max="6" value="6" inputmode="numeric" /></label>
+              <div class="room-limit-field">
+                <label for="room-limit">People</label>
+                <div class="people-stepper">
+                  <button type="button" data-room-limit-step="-1" aria-label="Decrease room size"><svg viewBox="0 0 24 24"><path d="M6 12h12"/></svg></button>
+                  <input id="room-limit" type="number" min="2" max="12" value="6" inputmode="numeric" />
+                  <button type="button" data-room-limit-step="1" aria-label="Increase room size"><svg viewBox="0 0 24 24"><path d="M12 6v12M6 12h12"/></svg></button>
+                </div>
+              </div>
             </div>
             <button id="share-button" class="button button-primary" type="button">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4h13A1.5 1.5 0 0 1 20 5.5v9a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 14.5v-9ZM8 20h8M12 16v4"/></svg>

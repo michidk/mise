@@ -59,7 +59,7 @@ Vercel serves files in `public/` from its CDN and runs the room REST API as stat
 | `PORT` | `3000` | HTTP port |
 | `HOST` | `0.0.0.0` | HTTP bind address |
 | `BASE_PATH` | _(empty)_ | Optional URL prefix, such as `/previews/mise` |
-| `MAX_PARTICIPANTS` | `6` | Deployment ceiling for total room participants, including the host (2–20) |
+| `MAX_PARTICIPANTS` | `12` | Deployment ceiling for total room participants, including the host (2–12) |
 | `DATABASE_URL` | _(in-memory locally)_ | PostgreSQL connection string; required on Vercel |
 | `STUN_URLS` | `stun:main.lohr.dev:3478,stun:stun.l.google.com:19302` | Comma-separated STUN URLs; the second default is a public fallback and non-STUN entries are ignored |
 

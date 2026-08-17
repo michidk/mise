@@ -3442,7 +3442,7 @@ var session = new RoomSession();
 var viewerControl;
 var localPresentation;
 var shareAudioEnabled = false;
-var maxParticipants = 6;
+var maxParticipants = 12;
 var guestNumber = 0;
 var currentQuality = "balanced";
 var currentStreamSettings = { ...qualityPresets.balanced };
@@ -4359,6 +4359,18 @@ $("#copy-room-code").addEventListener("click", () => void copyText(session.roomI
 $("#copy-invite-button").addEventListener("click", () => void copyText(`${location.origin}${appPath(`room/${session.roomId}`)}`, "Invite link copied."));
 document.querySelectorAll("[data-share-audio]").forEach((input) => {
   input.addEventListener("change", () => setShareAudio(input.checked));
+});
+document.querySelectorAll("[data-room-limit-step]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const input = document.querySelector("#room-limit");
+    if (!input) return;
+    const step = Number(button.dataset.roomLimitStep);
+    const current = Number.parseInt(input.value, 10) || 2;
+    input.value = String(Math.min(maxParticipants, Math.max(2, current + step)));
+  });
+});
+document.querySelector("#room-limit")?.addEventListener("change", (event) => {
+  event.currentTarget.value = String(selectedRoomLimit());
 });
 room.querySelector("[data-chat-form]")?.addEventListener("submit", (event) => {
   event.preventDefault();

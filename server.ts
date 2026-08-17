@@ -8,10 +8,10 @@ import { createRoomApi } from './src/room-api/index.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || '0.0.0.0';
-const configuredMaximum = Number(process.env.MAX_PARTICIPANTS || process.env.MAX_VIEWERS || 6);
+const configuredMaximum = Number(process.env.MAX_PARTICIPANTS || process.env.MAX_VIEWERS || 12);
 const MAX_PARTICIPANTS = Number.isSafeInteger(configuredMaximum)
-  ? Math.min(20, Math.max(2, configuredMaximum))
-  : 6;
+  ? Math.min(12, Math.max(2, configuredMaximum))
+  : 12;
 const BASE_PATH = normalizeBasePath(process.env.BASE_PATH);
 const publicDirectory = path.join(__dirname, 'public');
 const indexHtml = readFileSync(path.join(publicDirectory, 'index.html'), 'utf8');

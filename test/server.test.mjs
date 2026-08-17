@@ -63,7 +63,7 @@ test('serves the app and public client configuration', async () => {
   const room = await fetch(`${baseUrl}/room/abc12345`);
 
   assert.deepEqual(health, { ok: true });
-  assert.equal(config.maxParticipants, 6);
+  assert.equal(config.maxParticipants, 12);
   assert.deepEqual(config.iceServers, [{
     urls: ['stun:main.lohr.dev:3478', 'stun:stun.l.google.com:19302'],
   }]);
@@ -91,6 +91,7 @@ test('serves the app and public client configuration', async () => {
   assert.match(page, /Create a room/);
   assert.match(page, /Start room/);
   assert.match(page, /Join a room/);
+  assert.equal((page.match(/data-room-limit-step/g) || []).length, 2);
   assert.match(page, /Chat &amp; activity/);
   assert.equal((page.match(/data-participant-count/g) || []).length, 2);
   assert.match(page, /Lossless text pipeline/);
@@ -111,6 +112,13 @@ test('serves the app and public client configuration', async () => {
 });
 
 test('room API enforces passwords and participant limits', async () => {
+  const invalidLimit = await roomRequest('', {
+    method: 'POST',
+    body: JSON.stringify({ maxParticipants: 13 }),
+  });
+  assert.equal(invalidLimit.status, 400);
+  assert.equal((await invalidLimit.json()).error.code, 'invalid-participant-limit');
+
   const createdResponse = await roomRequest('', {
     method: 'POST',
     body: JSON.stringify({ password: 'correct horse', maxParticipants: 2 }),

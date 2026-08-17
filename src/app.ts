@@ -80,7 +80,7 @@ const session = new RoomSession();
 let viewerControl: RtcChannel | undefined;
 let localPresentation: TextPresentation | undefined;
 let shareAudioEnabled = false;
-let maxParticipants = 6;
+let maxParticipants = 12;
 let guestNumber = 0;
 let currentQuality: QualityName = 'balanced';
 let currentStreamSettings: TextCodecSettings = { ...qualityPresets.balanced };
@@ -1069,6 +1069,20 @@ $('#copy-invite-button').addEventListener('click', () => void copyText(`${locati
 
 document.querySelectorAll<HTMLInputElement>('[data-share-audio]').forEach((input) => {
   input.addEventListener('change', () => setShareAudio(input.checked));
+});
+
+document.querySelectorAll<HTMLButtonElement>('[data-room-limit-step]').forEach((button) => {
+  button.addEventListener('click', () => {
+    const input = document.querySelector<HTMLInputElement>('#room-limit');
+    if (!input) return;
+    const step = Number(button.dataset.roomLimitStep);
+    const current = Number.parseInt(input.value, 10) || 2;
+    input.value = String(Math.min(maxParticipants, Math.max(2, current + step)));
+  });
+});
+
+document.querySelector<HTMLInputElement>('#room-limit')?.addEventListener('change', (event) => {
+  (event.currentTarget as HTMLInputElement).value = String(selectedRoomLimit());
 });
 
 room.querySelector<HTMLFormElement>('[data-chat-form]')?.addEventListener('submit', (event) => {
