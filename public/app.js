@@ -4584,8 +4584,8 @@ function handleConnectivityMessage(peer, value) {
   }
   if (message.type === "connectivity-download-request") {
     const now = performance.now();
-    const lastResponse = connectivityDownloadResponseAt.get(peerId2) ?? 0;
-    if (now - lastResponse < 750) return;
+    const lastResponse = connectivityDownloadResponseAt.get(peerId2);
+    if (lastResponse !== void 0 && now - lastResponse < 750) return;
     connectivityDownloadResponseAt.set(peerId2, now);
     void sendConnectivityBurst(channel, key, "download").catch(() => {
     });

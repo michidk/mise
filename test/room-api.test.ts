@@ -19,7 +19,7 @@ test('signaling storage derives routing identity from the authenticated request'
   let appended: Parameters<RoomStore['appendSignal']>[0] | undefined;
   const store = {
     authenticate: async () => storedParticipant('real-sender', 'Sender'),
-    appendSignal: async (input) => {
+    appendSignal: async (input: Parameters<RoomStore['appendSignal']>[0]) => {
       appended = input;
       return true;
     },
