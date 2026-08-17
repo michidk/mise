@@ -588,7 +588,7 @@ body[data-screen="room"] .site-header { width: min(1440px, calc(100% - 48px)); h
 .room-workspace .chat-messages { padding: 14px 12px; gap: 11px; }
 .room-workspace .chat-activity { display: grid; grid-template-columns: 7px minmax(0, 1fr) auto; justify-content: stretch; gap: 7px; padding: 6px 7px; border-radius: 8px; background: rgba(235,233,227,.65); line-height: 1.35; }
 .room-workspace .chat-activity::before, .room-workspace .chat-activity::after { display: none; }
-.room-workspace .chat-activity > i { width: 6px; height: 6px; margin-top: 3px; border-radius: 50%; background: #90939c; }
+.room-workspace .chat-activity > i { width: 6px; height: 6px; border-radius: 50%; background: #90939c; }
 .room-workspace .activity-joined > i, .room-workspace .activity-stream-started > i { background: var(--green); }
 .room-workspace .activity-left > i, .room-workspace .activity-stream-stopped > i { background: var(--red); }
 .room-workspace .activity-settings > i { background: var(--blue); }
