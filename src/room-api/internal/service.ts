@@ -110,7 +110,14 @@ export class RoomService {
       || signal.payload === undefined || JSON.stringify(signal.payload).length > 128 * 1024) {
       throw new RoomApiError('invalid-signal', 400, 'The signaling message is invalid.');
     }
-    if (!await this.store.appendSignal({ roomId, senderId: participantId, ...signal, now })) throw unavailable();
+    if (!await this.store.appendSignal({
+      roomId,
+      senderId: participantId,
+      recipientId: signal.recipientId,
+      kind: signal.kind,
+      payload: signal.payload,
+      now,
+    })) throw unavailable();
   }
 
   async readSignals(roomId: string, participantId: string, token: string, after: number): Promise<SignalBatch> {
