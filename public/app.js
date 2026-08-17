@@ -3250,6 +3250,38 @@ var RtcMesh = class {
   peer(peerId2) {
     return this.peers.get(peerId2);
   }
+  async connectionStats(peerId2) {
+    const peer = this.peers.get(peerId2);
+    if (!peer) return void 0;
+    const report = await peer.connection.getStats();
+    let selectedPairId = "";
+    let selectedPair;
+    let lostPackets = 0;
+    let receivedPackets = 0;
+    report.forEach((stat) => {
+      const fields = stat;
+      if (stat.type === "transport" && typeof fields.selectedCandidatePairId === "string") {
+        selectedPairId = fields.selectedCandidatePairId;
+      }
+      if (stat.type === "candidate-pair" && (fields.selected === true || fields.nominated === true && fields.state === "succeeded")) {
+        selectedPair = stat;
+      }
+      if (!["inbound-rtp", "remote-inbound-rtp"].includes(stat.type)) return;
+      if (typeof fields.packetsLost === "number" && fields.packetsLost > 0) lostPackets += fields.packetsLost;
+      if (typeof fields.packetsReceived === "number" && fields.packetsReceived > 0) receivedPackets += fields.packetsReceived;
+    });
+    if (selectedPairId) selectedPair = report.get(selectedPairId) ?? selectedPair;
+    const pair = selectedPair;
+    const localCandidate = typeof pair?.localCandidateId === "string" ? report.get(pair.localCandidateId) : void 0;
+    const remoteCandidate = typeof pair?.remoteCandidateId === "string" ? report.get(pair.remoteCandidateId) : void 0;
+    const candidateTypes = [localCandidate, remoteCandidate].map((candidate) => candidate?.candidateType).filter((type) => typeof type === "string");
+    const route = candidateTypes.includes("relay") ? "relay" : candidateTypes.length ? "direct" : "unknown";
+    const packetTotal = lostPackets + receivedPackets;
+    return {
+      route,
+      packetLossPercent: packetTotal > 0 ? lostPackets / packetTotal * 100 : void 0
+    };
+  }
   async handleSignal(signal) {
     if (this.closed || signal.recipientId !== this.localPeerId || signal.senderId === this.localPeerId) return;
     const peer = this.ensurePeer(signal.senderId);
@@ -3311,6 +3343,7 @@ var RtcMesh = class {
     this.peers.delete(peerId2);
     peer.control.close();
     peer.screen.close();
+    peer.diagnostics.close();
     peer.connection.close();
     this.events.peerClosed?.(peerId2);
   }
@@ -3325,6 +3358,7 @@ var RtcMesh = class {
     const connection = new RTCPeerConnection(this.configuration);
     const control = new NativeRtcChannel(peerId2, connection.createDataChannel("control", { negotiated: true, id: 0, ordered: true }));
     const screen = new NativeRtcChannel(peerId2, connection.createDataChannel("screen", { negotiated: true, id: 1, ordered: true }));
+    const diagnostics = new NativeRtcChannel(peerId2, connection.createDataChannel("diagnostics", { negotiated: true, id: 2, ordered: true }));
     const audioSender = connection.addTransceiver("audio", { direction: "sendrecv" }).sender;
     const videoSender = connection.addTransceiver("video", { direction: "sendrecv" }).sender;
     const peer = {
@@ -3332,6 +3366,7 @@ var RtcMesh = class {
       connection,
       control,
       screen,
+      diagnostics,
       audioSender,
       videoSender,
       makingOffer: false,
@@ -3623,6 +3658,8 @@ var rtcConfig = {
 };
 var chatAudioContext;
 var chatSoundsEnabled = readChatSoundsEnabled();
+var cardNotificationsEnabled = readCardNotificationsEnabled();
+var chatCollapsed = readChatCollapsed();
 var toastTimer;
 var resolvePasswordPrompt;
 var hostConnections = /* @__PURE__ */ new Map();
@@ -3635,6 +3672,20 @@ var mutedPresenters = /* @__PURE__ */ new Set();
 var participantIds = /* @__PURE__ */ new Set();
 var participantNames = /* @__PURE__ */ new Map();
 var chatHistory = [];
+var chatEmotes = /* @__PURE__ */ new Map();
+var connectivityResults = /* @__PURE__ */ new Map();
+var pendingConnectivityPings = /* @__PURE__ */ new Map();
+var pendingConnectivityDownloads = /* @__PURE__ */ new Map();
+var pendingConnectivityUploads = /* @__PURE__ */ new Map();
+var incomingConnectivityUploads = /* @__PURE__ */ new Map();
+var connectivityDownloadResponseAt = /* @__PURE__ */ new Map();
+var CONNECTIVITY_PROBE_BYTES = 512 * 1024;
+var CONNECTIVITY_CHUNK_BYTES = 32 * 1024;
+var CONNECTIVITY_CHUNKS = CONNECTIVITY_PROBE_BYTES / CONNECTIVITY_CHUNK_BYTES;
+var CONNECTIVITY_BUFFER_LIMIT = 128 * 1024;
+var connectivityProbeChunk = crypto.getRandomValues(new Uint8Array(CONNECTIVITY_CHUNK_BYTES));
+var connectivityRun = 0;
+var connectivityTesting = false;
 var configReady = fetch(appPath("config")).then((response) => response.json()).then((config) => {
   rtcConfig = { iceServers: config.iceServers };
   maxParticipants = config.maxParticipants;
@@ -3644,6 +3695,15 @@ var configReady = fetch(appPath("config")).then((response) => response.json()).t
     input.value = String(Math.min(Number(input.value) || maxParticipants, maxParticipants));
   }
   updateBandwidthEstimate();
+}).catch(() => {
+});
+void fetch(appPath("emotes")).then((response) => response.ok ? response.json() : Promise.reject(new Error("Emotes unavailable"))).then((result) => {
+  if (!Array.isArray(result.emotes)) return;
+  for (const candidate of result.emotes) {
+    const emote = parseChatEmote(candidate);
+    if (emote) chatEmotes.set(emote.name, emote);
+  }
+  rerenderChatEmotes();
 }).catch(() => {
 });
 function appPath(pathname = "") {
@@ -3832,6 +3892,8 @@ function cancelPendingJoin(roomId) {
   history.replaceState({}, "", appPath());
 }
 function prepareRoomShell() {
+  toggleConnectivityPanel(false);
+  connectivityResults.clear();
   $("#room-code-display").textContent = session.roomId;
   $("#room-title").textContent = `Room ${session.roomId}`;
   $("#leave-room-button span").textContent = session.isHost ? "Close room" : "Leave room";
@@ -3855,6 +3917,9 @@ function startNativeMesh(roomSignaling) {
 }
 function routePeer(peerConnection) {
   peerChannels.set(peerConnection.peerId, peerConnection);
+  peerConnection.diagnostics.on("message", (value) => handleConnectivityMessage(peerConnection, value));
+  peerConnection.diagnostics.on("close", () => cancelPeerConnectivity(peerConnection.peerId, "The peer disconnected during the check."));
+  peerConnection.diagnostics.on("error", () => cancelPeerConnectivity(peerConnection.peerId, "The connection check failed."));
   if (session.isHost) {
     if (peerConnection.control.open) acceptViewer(peerConnection);
     else peerConnection.control.on("open", () => acceptViewer(peerConnection));
@@ -4236,7 +4301,16 @@ function renderStreamCard(presenter) {
     const loading = document.createElement("div");
     loading.className = "stream-connecting";
     loading.innerHTML = "<span></span><b>Connecting stream\u2026</b>";
-    media.append(visual, loading);
+    const fullscreen = document.createElement("button");
+    fullscreen.className = "stream-fullscreen";
+    fullscreen.type = "button";
+    fullscreen.setAttribute("aria-label", "Enter fullscreen");
+    fullscreen.title = "Enter fullscreen";
+    fullscreen.innerHTML = `
+      <svg class="fullscreen-enter" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/></svg>
+      <svg class="fullscreen-exit" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 8h5V3M21 8h-5V3M3 16h5v5M21 16h-5v5"/></svg>`;
+    fullscreen.addEventListener("click", () => void toggleStreamFullscreen(media));
+    media.append(visual, loading, fullscreen);
     const footer = document.createElement("footer");
     footer.innerHTML = `
       <div class="stream-person"><span class="stream-avatar"></span><span><strong></strong><small></small></span></div>
@@ -4269,6 +4343,23 @@ function attachLocalPreview(stream, presenterId) {
 }
 function streamCardMedia(presenterId, tag) {
   return streamGrid.querySelector(`[data-presenter-id="${CSS.escape(presenterId)}"] ${tag}`);
+}
+async function toggleStreamFullscreen(media) {
+  try {
+    if (document.fullscreenElement === media) await document.exitFullscreen();
+    else await media.requestFullscreen();
+  } catch {
+    showToast("Fullscreen is not available in this browser.");
+  }
+}
+function updateFullscreenButtons() {
+  for (const button of streamGrid.querySelectorAll(".stream-fullscreen")) {
+    const active = document.fullscreenElement === button.parentElement;
+    const label = active ? "Exit fullscreen" : "Enter fullscreen";
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-label", label);
+    button.title = label;
+  }
 }
 function setCardConnected(presenterId) {
   streamGrid.querySelector(`[data-presenter-id="${CSS.escape(presenterId)}"]`)?.classList.remove("connecting");
@@ -4397,6 +4488,445 @@ function renderParticipantPresence() {
     overflow.setAttribute("aria-label", overflow.dataset.tooltip);
     container.append(overflow);
   }
+  if (!$("#connection-check-panel").hidden) renderConnectivityResults();
+}
+function toggleConnectivityPanel(force) {
+  const panel = $("#connection-check-panel");
+  const shouldOpen = force ?? panel.hidden;
+  panel.hidden = !shouldOpen;
+  $("#connection-check-button").setAttribute("aria-expanded", String(shouldOpen));
+  if (shouldOpen) {
+    renderConnectivityResults();
+    void runConnectivityChecks();
+  } else {
+    connectivityRun += 1;
+    connectivityTesting = false;
+    cancelConnectivityRequests("Connection check stopped.");
+  }
+}
+async function runConnectivityChecks() {
+  const panel = $("#connection-check-panel");
+  if (panel.hidden) return;
+  const run = ++connectivityRun;
+  connectivityTesting = true;
+  cancelConnectivityRequests("A new connection check started.");
+  const localId = signaling?.participantId;
+  const peerIds = [...participantIds].filter((id) => id !== localId);
+  connectivityResults.clear();
+  for (const peerId2 of peerIds) connectivityResults.set(peerId2, { status: "testing" });
+  setConnectivitySummary("testing", peerIds.length ? "Checking every peer\u2026" : "No peers to check", peerIds.length ? "Measuring ping, transfer speed, packet loss, and connection route." : "Invite someone to the room, then run the check again.");
+  syncConnectivityRunButton();
+  renderConnectivityResults();
+  if (!peerIds.length) {
+    connectivityTesting = false;
+    syncConnectivityRunButton();
+    return;
+  }
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < peerIds.length && run === connectivityRun && !panel.hidden) {
+      const peerId2 = peerIds[cursor++];
+      try {
+        connectivityResults.set(peerId2, await testPeerConnectivity(peerId2));
+      } catch (error) {
+        connectivityResults.set(peerId2, {
+          status: "error",
+          quality: "poor",
+          error: errorMessage(error, "This peer did not respond to the check.")
+        });
+      }
+      if (run === connectivityRun && !panel.hidden) renderConnectivityResults();
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(2, peerIds.length) }, worker));
+  if (run !== connectivityRun || panel.hidden) return;
+  connectivityTesting = false;
+  syncConnectivityRunButton();
+  updateConnectivitySummary();
+}
+async function testPeerConnectivity(peerId2) {
+  const channel = peerChannels.get(peerId2)?.diagnostics;
+  if (!channel) throw new Error("Waiting for a direct peer connection.");
+  await waitForConnectivityChannel(channel);
+  const pingSamples = [];
+  for (let sample = 0; sample < 3; sample += 1) pingSamples.push(await measureConnectivityPing(channel));
+  const downloadBps = await measureConnectivityDownload(channel);
+  const uploadBps = await measureConnectivityUpload(channel);
+  const stats = await mesh?.connectionStats(peerId2).catch(() => void 0);
+  const pingMs = median(pingSamples);
+  const quality = connectionQuality(pingMs, downloadBps, uploadBps, stats?.packetLossPercent);
+  return {
+    status: "complete",
+    quality,
+    pingMs,
+    downloadBps,
+    uploadBps,
+    packetLossPercent: stats?.packetLossPercent,
+    route: stats?.route ?? "unknown"
+  };
+}
+function handleConnectivityMessage(peer, value) {
+  const message = connectivityMessage(value);
+  if (!message) return;
+  const { diagnostics: channel, peerId: peerId2 } = peer;
+  const key = message.id;
+  if (message.type === "connectivity-ping") {
+    if (channel.open) channel.send({ type: "connectivity-pong", id: key });
+    return;
+  }
+  if (message.type === "connectivity-pong") {
+    const pending = pendingConnectivityPings.get(key);
+    if (!pending || pending.peerId !== peerId2) return;
+    clearTimeout(pending.timer);
+    pendingConnectivityPings.delete(key);
+    pending.resolve(performance.now() - pending.startedAt);
+    return;
+  }
+  if (message.type === "connectivity-download-request") {
+    const now = performance.now();
+    const lastResponse = connectivityDownloadResponseAt.get(peerId2) ?? 0;
+    if (now - lastResponse < 750) return;
+    connectivityDownloadResponseAt.set(peerId2, now);
+    void sendConnectivityBurst(channel, key, "download").catch(() => {
+    });
+    return;
+  }
+  if (message.type === "connectivity-download-start") {
+    const pending = pendingConnectivityDownloads.get(key);
+    if (!pending || pending.peerId !== peerId2) return;
+    pending.startedAt = void 0;
+    pending.bytes = 0;
+    pending.chunks = 0;
+    return;
+  }
+  if (message.type === "connectivity-download-chunk") {
+    const pending = pendingConnectivityDownloads.get(key);
+    if (!pending || pending.peerId !== peerId2) return;
+    if (!validConnectivityChunk(message, pending.chunks)) {
+      failConnectivityTransfer(pendingConnectivityDownloads, key, "The download probe was malformed.");
+      return;
+    }
+    pending.startedAt ??= performance.now();
+    pending.bytes += message.payload.byteLength;
+    pending.chunks += 1;
+    return;
+  }
+  if (message.type === "connectivity-download-complete") {
+    finishConnectivityTransfer(pendingConnectivityDownloads, key, peerId2);
+    return;
+  }
+  if (message.type === "connectivity-upload-start") {
+    for (const [incomingKey, incoming2] of incomingConnectivityUploads) {
+      if (incoming2.peerId !== peerId2) continue;
+      clearTimeout(incoming2.timer);
+      incomingConnectivityUploads.delete(incomingKey);
+    }
+    const incoming = {
+      peerId: peerId2,
+      bytes: 0,
+      chunks: 0,
+      timer: setTimeout(() => incomingConnectivityUploads.delete(key), 8e3)
+    };
+    incomingConnectivityUploads.set(key, incoming);
+    return;
+  }
+  if (message.type === "connectivity-upload-chunk") {
+    const incoming = incomingConnectivityUploads.get(key);
+    if (!incoming || incoming.peerId !== peerId2) return;
+    if (!validConnectivityChunk(message, incoming.chunks)) {
+      clearTimeout(incoming.timer);
+      incomingConnectivityUploads.delete(key);
+      return;
+    }
+    incoming.startedAt ??= performance.now();
+    incoming.bytes += message.payload.byteLength;
+    incoming.chunks += 1;
+    return;
+  }
+  if (message.type === "connectivity-upload-complete") {
+    const incoming = incomingConnectivityUploads.get(key);
+    if (!incoming || incoming.peerId !== peerId2 || !incoming.startedAt || incoming.bytes !== CONNECTIVITY_PROBE_BYTES || incoming.chunks !== CONNECTIVITY_CHUNKS) return;
+    clearTimeout(incoming.timer);
+    incomingConnectivityUploads.delete(key);
+    if (channel.open) channel.send({
+      type: "connectivity-upload-result",
+      id: key,
+      bytes: incoming.bytes,
+      durationMs: Math.max(1, performance.now() - incoming.startedAt)
+    });
+    return;
+  }
+  if (message.type === "connectivity-upload-result") {
+    const pending = pendingConnectivityUploads.get(key);
+    if (!pending || pending.peerId !== peerId2 || message.bytes !== CONNECTIVITY_PROBE_BYTES || typeof message.durationMs !== "number" || !Number.isFinite(message.durationMs) || message.durationMs <= 0 || message.durationMs > 3e4) return;
+    clearTimeout(pending.timer);
+    pendingConnectivityUploads.delete(key);
+    pending.resolve(message.bytes * 8 / (message.durationMs / 1e3));
+  }
+}
+function connectivityMessage(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return void 0;
+  const message = value;
+  if (typeof message.type !== "string" || !message.type.startsWith("connectivity-") || typeof message.id !== "string" || !/^[a-z0-9-]{8,80}$/i.test(message.id)) return void 0;
+  return message;
+}
+function validConnectivityChunk(message, expectedSequence) {
+  return message.sequence === expectedSequence && message.total === CONNECTIVITY_CHUNKS && message.payload instanceof Uint8Array && message.payload.byteLength === CONNECTIVITY_CHUNK_BYTES;
+}
+function measureConnectivityPing(channel) {
+  return new Promise((resolve, reject) => {
+    const id = connectivityProbeId();
+    const pending = {
+      peerId: channel.peerId,
+      startedAt: performance.now(),
+      resolve,
+      reject,
+      timer: setTimeout(() => {
+        pendingConnectivityPings.delete(id);
+        reject(new Error("Ping timed out."));
+      }, 2500)
+    };
+    pendingConnectivityPings.set(id, pending);
+    try {
+      channel.send({ type: "connectivity-ping", id });
+    } catch (error) {
+      clearTimeout(pending.timer);
+      pendingConnectivityPings.delete(id);
+      reject(error instanceof Error ? error : new Error("Could not send the ping."));
+    }
+  });
+}
+function measureConnectivityDownload(channel) {
+  return new Promise((resolve, reject) => {
+    const id = connectivityProbeId();
+    const pending = connectivityTransfer(channel.peerId, resolve, reject, () => pendingConnectivityDownloads.delete(id));
+    pendingConnectivityDownloads.set(id, pending);
+    try {
+      channel.send({ type: "connectivity-download-request", id });
+    } catch (error) {
+      clearTimeout(pending.timer);
+      pendingConnectivityDownloads.delete(id);
+      reject(error instanceof Error ? error : new Error("Could not start the download check."));
+    }
+  });
+}
+function measureConnectivityUpload(channel) {
+  return new Promise((resolve, reject) => {
+    const id = connectivityProbeId();
+    const pending = connectivityTransfer(channel.peerId, resolve, reject, () => pendingConnectivityUploads.delete(id));
+    pendingConnectivityUploads.set(id, pending);
+    void sendConnectivityBurst(channel, id, "upload").catch((error) => {
+      if (!pendingConnectivityUploads.delete(id)) return;
+      clearTimeout(pending.timer);
+      reject(error instanceof Error ? error : new Error("Could not finish the upload check."));
+    });
+  });
+}
+function connectivityTransfer(peerId2, resolve, reject, expire) {
+  return {
+    peerId: peerId2,
+    bytes: 0,
+    chunks: 0,
+    resolve,
+    reject,
+    timer: setTimeout(() => {
+      expire();
+      reject(new Error("Speed check timed out."));
+    }, 8e3)
+  };
+}
+async function sendConnectivityBurst(channel, id, direction) {
+  if (!channel.open) throw new Error("The peer connection is not ready.");
+  channel.send({ type: `connectivity-${direction}-start`, id });
+  for (let sequence = 0; sequence < CONNECTIVITY_CHUNKS; sequence += 1) {
+    await waitForConnectivityBuffer(channel);
+    channel.send({
+      type: `connectivity-${direction}-chunk`,
+      id,
+      sequence,
+      total: CONNECTIVITY_CHUNKS,
+      payload: connectivityProbeChunk
+    });
+    if (sequence % 4 === 3) await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  channel.send({ type: `connectivity-${direction}-complete`, id });
+}
+async function waitForConnectivityBuffer(channel) {
+  const deadline = performance.now() + 5e3;
+  while (channel.bufferedAmount > CONNECTIVITY_BUFFER_LIMIT) {
+    if (!channel.open) throw new Error("The peer disconnected during the speed check.");
+    if (performance.now() >= deadline) throw new Error("The connection is too congested to finish the speed check.");
+    await new Promise((resolve) => setTimeout(resolve, 12));
+  }
+}
+function waitForConnectivityChannel(channel) {
+  if (channel.open) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const finish = (error) => {
+      clearTimeout(timer);
+      channel.off("open", opened);
+      channel.off("close", closed);
+      error ? reject(error) : resolve();
+    };
+    const opened = () => finish();
+    const closed = () => finish(new Error("The peer disconnected before the check started."));
+    const timer = setTimeout(() => finish(new Error("Waiting for the peer connection timed out.")), 4e3);
+    channel.on("open", opened);
+    channel.on("close", closed);
+  });
+}
+function finishConnectivityTransfer(pendingTransfers, id, peerId2) {
+  const pending = pendingTransfers.get(id);
+  if (!pending || pending.peerId !== peerId2 || !pending.startedAt || pending.bytes !== CONNECTIVITY_PROBE_BYTES || pending.chunks !== CONNECTIVITY_CHUNKS) {
+    if (pending) failConnectivityTransfer(pendingTransfers, id, "The speed check returned incomplete data.");
+    return;
+  }
+  clearTimeout(pending.timer);
+  pendingTransfers.delete(id);
+  const durationMs = Math.max(1, performance.now() - pending.startedAt);
+  pending.resolve(pending.bytes * 8 / (durationMs / 1e3));
+}
+function failConnectivityTransfer(pendingTransfers, id, message) {
+  const pending = pendingTransfers.get(id);
+  if (!pending) return;
+  clearTimeout(pending.timer);
+  pendingTransfers.delete(id);
+  pending.reject(new Error(message));
+}
+function cancelPeerConnectivity(peerId2, message) {
+  for (const [id, pending] of pendingConnectivityPings) {
+    if (pending.peerId !== peerId2) continue;
+    clearTimeout(pending.timer);
+    pendingConnectivityPings.delete(id);
+    pending.reject(new Error(message));
+  }
+  for (const transfers of [pendingConnectivityDownloads, pendingConnectivityUploads]) {
+    for (const [id, pending] of transfers) {
+      if (pending.peerId !== peerId2) continue;
+      clearTimeout(pending.timer);
+      transfers.delete(id);
+      pending.reject(new Error(message));
+    }
+  }
+  for (const [id, incoming] of incomingConnectivityUploads) {
+    if (incoming.peerId !== peerId2) continue;
+    clearTimeout(incoming.timer);
+    incomingConnectivityUploads.delete(id);
+  }
+}
+function cancelConnectivityRequests(message) {
+  const peerIds = /* @__PURE__ */ new Set([
+    ...[...pendingConnectivityPings.values()].map(({ peerId: peerId2 }) => peerId2),
+    ...[...pendingConnectivityDownloads.values()].map(({ peerId: peerId2 }) => peerId2),
+    ...[...pendingConnectivityUploads.values()].map(({ peerId: peerId2 }) => peerId2),
+    ...[...incomingConnectivityUploads.values()].map(({ peerId: peerId2 }) => peerId2)
+  ]);
+  for (const peerId2 of peerIds) cancelPeerConnectivity(peerId2, message);
+}
+function connectivityProbeId() {
+  return `probe-${crypto.randomUUID()}`;
+}
+function median(values) {
+  const sorted = [...values].sort((left, right) => left - right);
+  return sorted[Math.floor(sorted.length / 2)] ?? 0;
+}
+function connectionQuality(pingMs, downloadBps, uploadBps, packetLossPercent) {
+  const loss = packetLossPercent ?? 0;
+  if (pingMs < 120 && downloadBps >= 5e6 && uploadBps >= 3e6 && loss < 2) return "good";
+  if (pingMs < 250 && downloadBps >= 1e6 && uploadBps >= 1e6 && loss < 5) return "fair";
+  return "poor";
+}
+function renderConnectivityResults() {
+  const container = $("#connection-check-results");
+  const localId = signaling?.participantId;
+  const peerIds = [...participantIds].filter((id) => id !== localId);
+  container.replaceChildren();
+  if (!peerIds.length) {
+    const empty = document.createElement("p");
+    empty.className = "connection-check-empty";
+    empty.textContent = "You\u2019re the only person here. Connection results will appear after someone joins.";
+    container.append(empty);
+    return;
+  }
+  for (const peerId2 of peerIds) container.append(connectivityResultCard(peerId2, connectivityResults.get(peerId2)));
+}
+function connectivityResultCard(peerId2, result) {
+  const isHost = peerId2 === (signaling?.hostId || session.hostId);
+  const assignedName = participantNames.get(peerId2);
+  const identity = isHost ? { name: "Host", emoji: "\u{1F451}" } : assignedName ? guestIdentityWithName(peerId2, assignedName) : guestIdentity(peerId2);
+  const article = document.createElement("article");
+  const status = result?.status ?? (connectivityTesting ? "testing" : "idle");
+  article.className = "connection-peer";
+  article.dataset.quality = status === "complete" ? result?.quality ?? "poor" : status;
+  article.innerHTML = `
+    <div class="connection-peer-heading">
+      <div class="connection-peer-person"><span class="connection-peer-avatar"></span><span><strong></strong><small></small></span></div>
+      <span class="connection-peer-quality"></span>
+    </div>`;
+  const avatar = article.querySelector(".connection-peer-avatar");
+  const name = article.querySelector(".connection-peer-person strong");
+  const detail = article.querySelector(".connection-peer-person small");
+  const quality = article.querySelector(".connection-peer-quality");
+  if (avatar) avatar.textContent = identity.emoji;
+  if (name) name.textContent = assignedName || identity.name;
+  if (detail) detail.textContent = isHost ? "Room host" : "Peer connection";
+  if (quality) quality.textContent = status === "testing" ? "Checking" : status === "error" ? "Unavailable" : status === "idle" ? "Not tested" : result?.quality ?? "Unknown";
+  if (status === "error") {
+    const error = document.createElement("p");
+    error.className = "connection-peer-error";
+    error.textContent = result?.error ?? "This peer did not respond to the check.";
+    article.append(error);
+    return article;
+  }
+  const metrics = document.createElement("div");
+  metrics.className = "connection-peer-metrics";
+  const values = status === "complete" ? [
+    `${Math.round(result?.pingMs ?? 0)} ms`,
+    formatConnectivitySpeed(result?.downloadBps),
+    formatConnectivitySpeed(result?.uploadBps),
+    result?.packetLossPercent === void 0 ? "\u2014" : `${result.packetLossPercent.toFixed(result.packetLossPercent < 1 ? 1 : 0)}%`
+  ] : status === "testing" ? ["Checking", "Checking", "Checking", "Checking"] : ["\u2014", "\u2014", "\u2014", "\u2014"];
+  ["Ping", "Down", "Up", "Loss"].forEach((label, index) => {
+    const metric = document.createElement("span");
+    metric.className = "connection-metric";
+    const metricLabel = document.createElement("small");
+    const metricValue = document.createElement("strong");
+    metricLabel.textContent = label;
+    metricValue.textContent = values[index];
+    metric.append(metricLabel, metricValue);
+    metrics.append(metric);
+  });
+  article.append(metrics);
+  if (detail && status === "complete") detail.textContent = result?.route === "relay" ? "Relayed connection" : result?.route === "direct" ? "Direct connection" : "Connection route unavailable";
+  return article;
+}
+function updateConnectivitySummary() {
+  const results = [...connectivityResults.values()];
+  const complete = results.filter((result) => result.status === "complete");
+  const hasErrors = results.some((result) => result.status === "error");
+  const qualities = complete.map((result) => result.quality);
+  const quality = hasErrors || qualities.includes("poor") ? "poor" : qualities.includes("fair") ? "fair" : "good";
+  const title = quality === "good" ? "Connections look great" : quality === "fair" ? "Connections look usable" : "Some connections need attention";
+  const detail = hasErrors ? "At least one peer did not finish the check. They may still be connecting." : quality === "good" ? "Low latency and enough peer-to-peer bandwidth for sharing." : quality === "fair" ? "Sharing should work, but quality may adapt during busy moments." : "High latency, packet loss, or limited bandwidth may affect sharing.";
+  setConnectivitySummary(quality, title, detail);
+}
+function setConnectivitySummary(quality, title, detail) {
+  const summary = $("#connection-check-summary");
+  summary.dataset.quality = quality;
+  const titleElement = summary.querySelector("strong");
+  const detailElement = summary.querySelector("small");
+  if (titleElement) titleElement.textContent = title;
+  if (detailElement) detailElement.textContent = detail;
+}
+function syncConnectivityRunButton() {
+  const button = $("#connection-check-run");
+  button.disabled = connectivityTesting;
+  button.textContent = connectivityTesting ? "Checking\u2026" : "Run again";
+}
+function formatConnectivitySpeed(bitsPerSecond) {
+  if (!bitsPerSecond || !Number.isFinite(bitsPerSecond)) return "\u2014";
+  const megabits = bitsPerSecond / 1e6;
+  return `${megabits >= 10 ? Math.round(megabits) : megabits.toFixed(1)} Mbps`;
 }
 function broadcastParticipantCount() {
   updateParticipantCount(hostConnections.size + 1);
@@ -4408,6 +4938,8 @@ function removeViewer(viewerId, expectedConnection) {
   hostConnections.delete(viewerId);
   participantIds.delete(viewerId);
   participantNames.delete(viewerId);
+  connectivityResults.delete(viewerId);
+  cancelPeerConnectivity(viewerId, "The peer left the room.");
   renderParticipantPresence();
   peerChannels.delete(viewerId);
   viewer.control.close();
@@ -4424,6 +4956,8 @@ function removeViewer(viewerId, expectedConnection) {
 }
 function handlePeerClosed(peerId2) {
   peerChannels.delete(peerId2);
+  connectivityResults.delete(peerId2);
+  cancelPeerConnectivity(peerId2, "The peer disconnected during the check.");
   incomingTextReceivers.get(peerId2)?.close();
   incomingTextReceivers.delete(peerId2);
   remoteVideoStreams.delete(peerId2);
@@ -4586,7 +5120,16 @@ function appendChatActivity(activity, playSound = true) {
   container.append(item);
   trimChatEntries(container);
   container.scrollTop = container.scrollHeight;
-  if (playSound) playChatSound();
+  if (playSound) {
+    playChatSound();
+    if (activity.activity === "joined" || activity.activity === "left") {
+      showRoomNotification({
+        kind: activity.activity,
+        title: `${activity.author} ${activity.text}`,
+        description: "Room activity"
+      });
+    }
+  }
 }
 function appendChatMessage(message, playSound = true) {
   const container = room.querySelector("[data-chat-messages]");
@@ -4603,13 +5146,58 @@ function appendChatMessage(message, playSound = true) {
   author.textContent = isOwn ? "You" : message.author;
   time.dateTime = new Date(message.sentAt).toISOString();
   time.textContent = new Intl.DateTimeFormat([], { hour: "numeric", minute: "2-digit" }).format(message.sentAt);
-  body.textContent = message.text;
+  body.dataset.chatText = message.text;
+  renderChatText(body, message.text);
   header.append(author, time);
   article.append(header, body);
   container.append(article);
   trimChatEntries(container);
   container.scrollTop = container.scrollHeight;
-  if (playSound) playChatSound();
+  if (playSound) {
+    playChatSound();
+    if (!isOwn) showRoomNotification({ kind: "message", title: `${message.author} sent a message`, description: message.text });
+  }
+}
+function renderChatText(container, text) {
+  const content = document.createDocumentFragment();
+  for (const token of text.split(/(\s+)/)) {
+    const emote = chatEmotes.get(token);
+    if (!emote) {
+      content.append(document.createTextNode(token));
+      continue;
+    }
+    const image = document.createElement("img");
+    image.className = "chat-emote";
+    image.src = emote.url;
+    image.alt = emote.name;
+    image.title = `${emote.name} \xB7 ${emote.provider.toUpperCase()}`;
+    image.loading = "lazy";
+    image.decoding = "async";
+    image.referrerPolicy = "no-referrer";
+    content.append(image);
+  }
+  container.replaceChildren(content);
+}
+function rerenderChatEmotes() {
+  room.querySelectorAll("[data-chat-text]").forEach((body) => {
+    renderChatText(body, body.dataset.chatText || "");
+  });
+}
+function parseChatEmote(value) {
+  if (!value || typeof value !== "object") return void 0;
+  const candidate = value;
+  if (typeof candidate.name !== "string" || !candidate.name || typeof candidate.url !== "string" || !["twitch", "bttv", "ffz", "7tv"].includes(candidate.provider || "")) return void 0;
+  try {
+    if (new URL(candidate.url).protocol !== "https:") return void 0;
+  } catch {
+    return void 0;
+  }
+  return {
+    name: candidate.name,
+    url: candidate.url,
+    provider: candidate.provider,
+    animated: candidate.animated === true
+  };
 }
 function sendChat(form) {
   const input = form.querySelector("[data-chat-input]");
@@ -4652,6 +5240,82 @@ function updateElapsedTimes() {
 }
 function initials(name) {
   return name.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase();
+}
+var notificationIcons = {
+  message: '<path d="M20 15a3 3 0 0 1-3 3H9l-5 3v-6a3 3 0 0 1-1-2.2V7a3 3 0 0 1 3-3h11a3 3 0 0 1 3 3v8Z"/>',
+  joined: '<path d="M15 20v-1.5c0-2-1.8-3.5-4-3.5s-4 1.5-4 3.5V20M11 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM18 8v6M15 11h6"/>',
+  left: '<path d="M15 20v-1.5c0-2-1.8-3.5-4-3.5s-4 1.5-4 3.5V20M11 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM15 11h6"/>'
+};
+function showRoomNotification({ kind, title, description }) {
+  if (!cardNotificationsEnabled) return;
+  const toaster = document.querySelector("#notification-toaster");
+  if (!toaster) return;
+  const card = document.createElement("article");
+  card.className = "notification-card";
+  card.dataset.kind = kind;
+  card.innerHTML = `
+    <span class="notification-card-icon"><svg viewBox="0 0 24 24" aria-hidden="true">${notificationIcons[kind]}</svg></span>
+    <div class="notification-card-copy"><strong></strong><p></p></div>
+    <button class="notification-card-close" type="button" aria-label="Dismiss notification"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg></button>`;
+  const titleElement = card.querySelector("strong");
+  const descriptionElement = card.querySelector("p");
+  if (titleElement) titleElement.textContent = title;
+  if (descriptionElement) descriptionElement.textContent = description;
+  const remove = () => {
+    if (!card.isConnected || card.classList.contains("removing")) return;
+    card.classList.add("removing");
+    setTimeout(() => card.remove(), 180);
+  };
+  card.querySelector("button")?.addEventListener("click", remove);
+  toaster.prepend(card);
+  while (toaster.children.length > 4) toaster.lastElementChild?.remove();
+  setTimeout(remove, 5e3);
+}
+function readCardNotificationsEnabled() {
+  try {
+    return localStorage.getItem("mise-card-notifications") !== "off";
+  } catch {
+    return true;
+  }
+}
+function syncCardNotificationButtons() {
+  const action = cardNotificationsEnabled ? "Turn off popup notifications" : "Turn on popup notifications";
+  document.querySelectorAll("[data-card-notification-toggle]").forEach((button) => {
+    button.setAttribute("aria-pressed", String(cardNotificationsEnabled));
+    button.setAttribute("aria-label", action);
+    button.title = action;
+  });
+}
+function toggleCardNotifications() {
+  cardNotificationsEnabled = !cardNotificationsEnabled;
+  try {
+    localStorage.setItem("mise-card-notifications", cardNotificationsEnabled ? "on" : "off");
+  } catch {
+  }
+  syncCardNotificationButtons();
+  if (!cardNotificationsEnabled) $("#notification-toaster").replaceChildren();
+  showToast(cardNotificationsEnabled ? "Popup notifications enabled." : "Popup notifications muted.");
+}
+function readChatCollapsed() {
+  try {
+    return localStorage.getItem("mise-chat-collapsed") === "yes";
+  } catch {
+    return false;
+  }
+}
+function syncChatCollapsed() {
+  room.querySelector(".room-workspace")?.classList.toggle("chat-collapsed", chatCollapsed);
+  $("#chat-collapse-button").setAttribute("aria-expanded", String(!chatCollapsed));
+  $("#chat-expand-button").setAttribute("aria-expanded", String(!chatCollapsed));
+}
+function setChatCollapsed(collapsed) {
+  chatCollapsed = collapsed;
+  try {
+    localStorage.setItem("mise-chat-collapsed", collapsed ? "yes" : "no");
+  } catch {
+  }
+  syncChatCollapsed();
+  if (!collapsed) queueMicrotask(() => room.querySelector("[data-chat-input]")?.focus());
 }
 function readChatSoundsEnabled() {
   try {
@@ -4734,6 +5398,8 @@ async function leaveRoom() {
   location.href = appPath();
 }
 function disposeConnections() {
+  toggleConnectivityPanel(false);
+  connectivityResults.clear();
   viewerControl = void 0;
   signaling?.stop();
   signaling = void 0;
@@ -4795,6 +5461,9 @@ $("#local-audio-button").addEventListener("click", toggleLocalAudio);
 $("#leave-room-button").addEventListener("click", () => void leaveRoom());
 $("#copy-room-code").addEventListener("click", () => void copyText(session.roomId, "Room code copied."));
 $("#copy-invite-button").addEventListener("click", () => void copyText(`${location.origin}${appPath(`room/${session.roomId}`)}`, "Invite link copied."));
+$("#connection-check-button").addEventListener("click", () => toggleConnectivityPanel());
+$("#connection-check-close").addEventListener("click", () => toggleConnectivityPanel(false));
+$("#connection-check-run").addEventListener("click", () => void runConnectivityChecks());
 document.querySelectorAll("[data-share-audio]").forEach((input) => {
   input.addEventListener("change", () => setShareAudio(input.checked));
 });
@@ -4816,6 +5485,11 @@ room.querySelector("[data-chat-form]")?.addEventListener("submit", (event) => {
 });
 syncChatSoundButtons();
 document.querySelectorAll("[data-chat-sound-toggle]").forEach((button) => button.addEventListener("click", toggleChatSounds));
+syncCardNotificationButtons();
+document.querySelectorAll("[data-card-notification-toggle]").forEach((button) => button.addEventListener("click", toggleCardNotifications));
+syncChatCollapsed();
+$("#chat-collapse-button").addEventListener("click", () => setChatCollapsed(true));
+$("#chat-expand-button").addEventListener("click", () => setChatCollapsed(false));
 document.addEventListener("pointerdown", prepareChatAudio, { once: true, passive: true });
 document.addEventListener("keydown", prepareChatAudio, { once: true });
 setInterval(updateElapsedTimes, 3e4);
@@ -4830,9 +5504,14 @@ document.querySelectorAll("[data-quality]").forEach((button) => {
   });
 });
 $("#apply-custom-quality").addEventListener("click", () => void setQuality("custom", customVideoSettings()));
+document.addEventListener("fullscreenchange", updateFullscreenButtons);
 document.addEventListener("click", (event) => {
   const target = event.target instanceof Element ? event.target : null;
   if (!target?.closest("[data-quality-trigger]") && !target?.closest("#quality-menu")) closeQualityMenu();
+  if (!target?.closest(".connection-check-wrap") && !$("#connection-check-panel").hidden) toggleConnectivityPanel(false);
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !$("#connection-check-panel").hidden) toggleConnectivityPanel(false);
 });
 $("#join-form").addEventListener("submit", (event) => {
   event.preventDefault();

@@ -1,6 +1,6 @@
 import type { OutgoingSignal, SignalEnvelope } from '../../signaling/index.js';
 import { NativeRtcChannel } from './channel.js';
-import type { RtcMeshEvents, RtcPeerChannels } from '../types.js';
+import type { RtcConnectionStats, RtcMeshEvents, RtcPeerChannels } from '../types.js';
 
 interface PeerState extends RtcPeerChannels {
   connection: RTCPeerConnection;
@@ -34,6 +34,44 @@ export class RtcMesh {
 
   peer(peerId: string) {
     return this.peers.get(peerId);
+  }
+
+  async connectionStats(peerId: string): Promise<RtcConnectionStats | undefined> {
+    const peer = this.peers.get(peerId);
+    if (!peer) return undefined;
+    const report = await peer.connection.getStats();
+    let selectedPairId = '';
+    let selectedPair: RTCStats | undefined;
+    let lostPackets = 0;
+    let receivedPackets = 0;
+    report.forEach((stat) => {
+      const fields = stat as RTCStats & Record<string, unknown>;
+      if (stat.type === 'transport' && typeof fields.selectedCandidatePairId === 'string') {
+        selectedPairId = fields.selectedCandidatePairId;
+      }
+      if (stat.type === 'candidate-pair'
+        && (fields.selected === true || (fields.nominated === true && fields.state === 'succeeded'))) {
+        selectedPair = stat;
+      }
+      if (!['inbound-rtp', 'remote-inbound-rtp'].includes(stat.type)) return;
+      if (typeof fields.packetsLost === 'number' && fields.packetsLost > 0) lostPackets += fields.packetsLost;
+      if (typeof fields.packetsReceived === 'number' && fields.packetsReceived > 0) receivedPackets += fields.packetsReceived;
+    });
+    if (selectedPairId) selectedPair = report.get(selectedPairId) ?? selectedPair;
+    const pair = selectedPair as (RTCStats & Record<string, unknown>) | undefined;
+    const localCandidate = typeof pair?.localCandidateId === 'string' ? report.get(pair.localCandidateId) : undefined;
+    const remoteCandidate = typeof pair?.remoteCandidateId === 'string' ? report.get(pair.remoteCandidateId) : undefined;
+    const candidateTypes = [localCandidate, remoteCandidate]
+      .map((candidate) => (candidate as (RTCStats & Record<string, unknown>) | undefined)?.candidateType)
+      .filter((type): type is string => typeof type === 'string');
+    const route = candidateTypes.includes('relay')
+      ? 'relay'
+      : candidateTypes.length ? 'direct' : 'unknown';
+    const packetTotal = lostPackets + receivedPackets;
+    return {
+      route,
+      packetLossPercent: packetTotal > 0 ? (lostPackets / packetTotal) * 100 : undefined,
+    };
   }
 
   async handleSignal(signal: SignalEnvelope) {
@@ -101,6 +139,7 @@ export class RtcMesh {
     this.peers.delete(peerId);
     peer.control.close();
     peer.screen.close();
+    peer.diagnostics.close();
     peer.connection.close();
     this.events.peerClosed?.(peerId);
   }
@@ -117,6 +156,7 @@ export class RtcMesh {
     const connection = new RTCPeerConnection(this.configuration);
     const control = new NativeRtcChannel(peerId, connection.createDataChannel('control', { negotiated: true, id: 0, ordered: true }));
     const screen = new NativeRtcChannel(peerId, connection.createDataChannel('screen', { negotiated: true, id: 1, ordered: true }));
+    const diagnostics = new NativeRtcChannel(peerId, connection.createDataChannel('diagnostics', { negotiated: true, id: 2, ordered: true }));
     const audioSender = connection.addTransceiver('audio', { direction: 'sendrecv' }).sender;
     const videoSender = connection.addTransceiver('video', { direction: 'sendrecv' }).sender;
     const peer: PeerState = {
@@ -124,6 +164,7 @@ export class RtcMesh {
       connection,
       control,
       screen,
+      diagnostics,
       audioSender,
       videoSender,
       makingOffer: false,

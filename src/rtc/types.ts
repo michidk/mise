@@ -16,6 +16,12 @@ export interface RtcPeerChannels {
   peerId: string;
   control: RtcChannel;
   screen: RtcChannel;
+  diagnostics: RtcChannel;
+}
+
+export interface RtcConnectionStats {
+  route: 'direct' | 'relay' | 'unknown';
+  packetLossPercent?: number;
 }
 
 export type RtcSignal =

@@ -114,7 +114,8 @@ test('serves the app and public client configuration', async () => {
   assert.match(page, /<base href="\.\.\/" \/>/);
   assert.match(page, /Create a room/);
   assert.match(page, /Start room/);
-  assert.match(page, /Join a room/);
+  assert.match(page, /id="join-form"/);
+  assert.match(page, />\s*Join room\s*</);
   assert.match(page, /id="join-password-dialog"/);
   assert.match(page, /Enter room password/);
   assert.equal((page.match(/data-room-limit-step/g) || []).length, 2);

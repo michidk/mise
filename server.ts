@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { createAdminRouter } from './src/admin.js';
+import { globalEmotes } from './src/emotes.js';
 import { createRoomApi } from './src/room-api/index.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -60,6 +61,17 @@ app.get(route('/config'), (_, response) => {
 
   response.set('Cache-Control', 'private, no-store');
   response.json({ iceServers, maxParticipants: MAX_PARTICIPANTS });
+});
+
+app.get(route('/emotes'), async (_, response) => {
+  try {
+    const emotes = await globalEmotes();
+    response.set('Cache-Control', 'public, max-age=3600, s-maxage=21600, stale-while-revalidate=86400');
+    response.json({ emotes });
+  } catch {
+    response.set('Cache-Control', 'public, max-age=60');
+    response.json({ emotes: [] });
+  }
 });
 
 app.use(BASE_PATH || '/', express.static(publicDirectory, {

@@ -4,8 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#f5f2eb" />
-    <meta name="description" content="Simple, private, peer-to-peer screen sharing in your browser." />
-    <title>mise — show your screen, nothing else</title>
+    <meta name="description" content="A free, open-source place to chat, share, and hang out — directly between browsers." />
+    <title>mise — your people, your room</title>
     <base href="/" />
     <link rel="icon" href="favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="styles.css" />
@@ -27,9 +27,15 @@
 
     <main id="landing" class="landing">
       <div class="hero-copy">
-        <div class="eyebrow"><span class="pulse-dot"></span> Peer to peer · No account</div>
-        <h1>Show your screen.<br /><span>Nothing else.</span></h1>
-        <p class="hero-description">A private screen share that runs in your browser. Start a room, send the link, and you’re live.</p>
+        <div class="eyebrow"><span class="pulse-dot"></span> Free · Open source · Peer to peer</div>
+        <h1>Your people.<br /><span>Your room.</span></h1>
+        <p class="hero-description">A private place to chat, share screens, and hang out — without accounts, installs, or a subscription.</p>
+
+        <div class="feature-pills" aria-label="Room features">
+          <span><svg viewBox="0 0 24 24"><path d="M20 15a3 3 0 0 1-3 3H9l-5 3v-6a3 3 0 0 1-1-2.2V7a3 3 0 0 1 3-3h11a3 3 0 0 1 3 3v8Z"/></svg> Live chat</span>
+          <span><svg viewBox="0 0 24 24"><path d="M4 5h16v12H4zM8 21h8M12 17v4"/></svg> Multi-screen sharing</span>
+          <span><svg viewBox="0 0 24 24"><path d="M11 5 6.5 9H3v6h3.5L11 19V5ZM15 9a4 4 0 0 1 0 6M18 6a8 8 0 0 1 0 12"/></svg> Shared audio</span>
+        </div>
 
         <div class="hero-actions" aria-label="Room actions">
           <section class="room-action-card start-room-card">
@@ -37,9 +43,9 @@
               <span class="action-card-icon" aria-hidden="true">
                 <svg viewBox="0 0 24 24"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4h13A1.5 1.5 0 0 1 20 5.5v9a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 14.5v-9ZM8 20h8M12 16v4"/></svg>
               </span>
-              <span><small>Host a room</small><strong>Create a room</strong></span>
+              <span><small>Bring people together</small><strong>Create a room</strong></span>
             </div>
-            <p>Open a private room, then send the invite link.</p>
+            <p>Make a private space and invite up to 12 people.</p>
             <div class="room-create-options">
               <label><span>Password <small>Optional</small></span><input id="room-password" type="password" maxlength="128" autocomplete="new-password" placeholder="Add a password" /></label>
               <div class="room-limit-field">
@@ -61,9 +67,9 @@
               <span class="action-card-icon" aria-hidden="true">
                 <svg viewBox="0 0 24 24"><path d="M14 8l4 4-4 4M18 12H8M10 4H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h5"/></svg>
               </span>
-              <span><small>Have an invite?</small><strong>Join a room</strong></span>
+              <span><small>Have an invite?</small><strong>Drop into a room</strong></span>
             </div>
-            <p>Enter the room code from the person sharing.</p>
+            <p>Enter a room code and join your people instantly.</p>
             <label class="room-field" for="room-code"><span>Room code</span><input id="room-code" autocomplete="off" spellcheck="false" placeholder="e.g. abcd-2345" maxlength="32" /></label>
             <button class="button join-button" type="submit">
               Join room
@@ -73,34 +79,44 @@
         </div>
 
         <div class="trust-row" aria-label="Service features">
-          <span><svg viewBox="0 0 24 24"><path d="M7 10V8a5 5 0 0 1 10 0v2M6 10h12v10H6z"/></svg> Encrypted</span>
-          <span><svg viewBox="0 0 24 24"><path d="M4 7h16M7 4v6M17 4v6M5 20h14V7H5z"/><path d="m9 15 2 2 4-4"/></svg> No installs</span>
-          <span><svg viewBox="0 0 24 24"><path d="M12 3 4 7v5c0 5 3.4 8 8 9 4.6-1 8-4 8-9V7l-8-4Z"/><path d="m9 12 2 2 4-4"/></svg> Nothing recorded</span>
+          <span><svg viewBox="0 0 24 24"><path d="M7 10V8a5 5 0 0 1 10 0v2M6 10h12v10H6z"/></svg> Peer-to-peer media</span>
+          <span><svg viewBox="0 0 24 24"><path d="M4 7h16M7 4v6M17 4v6M5 20h14V7H5z"/><path d="m9 15 2 2 4-4"/></svg> Works in your browser</span>
+          <span><svg viewBox="0 0 24 24"><path d="M12 3 4 7v5c0 5 3.4 8 8 9 4.6-1 8-4 8-9V7l-8-4Z"/><path d="m9 12 2 2 4-4"/></svg> No ads or paywalls</span>
         </div>
       </div>
 
       <div class="hero-art" aria-hidden="true">
         <div class="art-orbit orbit-one"></div>
         <div class="art-orbit orbit-two"></div>
-        <div class="browser-card">
+        <div class="browser-card room-preview">
           <div class="browser-bar"><i></i><i></i><i></i><span></span></div>
           <div class="browser-body">
-            <div class="mini-sidebar"><b></b><i></i><i></i><i></i><i></i></div>
+            <div class="mini-sidebar">
+              <b>m</b>
+              <span class="mini-room active"><i></i>friends</span>
+              <span class="mini-room"><i></i>co-working</span>
+              <span class="mini-room"><i></i>game night</span>
+              <small>Open rooms</small>
+            </div>
             <div class="mini-content">
-              <div class="mini-title"></div>
-              <div class="mini-text"></div>
-              <div class="mini-text short"></div>
-              <div class="mini-cards"><i></i><i></i><i></i></div>
-              <div class="mini-chart"><span></span><span></span><span></span><span></span><span></span><span></span></div>
+              <div class="mini-room-heading"><span><small>LIVE ROOM</small><strong>Friday hangout</strong></span><div class="mini-avatars"><i>J</i><i>M</i><i>A</i></div></div>
+              <div class="mini-stage">
+                <div class="mini-stream"><span class="mini-window"><i></i><i></i><i></i></span><b>Jamie is sharing</b></div>
+                <div class="mini-chat">
+                  <strong>Room chat</strong>
+                  <p><i>J</i><span><b>Jamie</b>what are we playing?</span></p>
+                  <p><i>M</i><span><b>Morgan</b>give me two mins 👋</span></p>
+                  <div>Message the room… <b>➤</b></div>
+                </div>
+              </div>
             </div>
           </div>
-          <div class="live-chip"><span></span> You’re sharing</div>
+          <div class="live-chip"><span></span> Room is live</div>
         </div>
-        <div class="cursor-badge"><svg viewBox="0 0 30 36"><path d="m4 3 21 18-11 1-6 10L4 3Z"/></svg><span>You</span></div>
-        <div class="viewer-bubble"><span class="avatar">AK</span><span><strong>Alex joined</strong><small>Just now</small></span></div>
+        <div class="viewer-bubble"><span class="avatar">AK</span><span><strong>Alex joined the room</strong><small>Just now</small></span></div>
       </div>
 
-      <div class="landing-footnote">Built on WebRTC. Your screen travels directly between browsers.</div>
+      <div class="landing-footnote">Media travels directly between browsers. Room metadata is stored to keep everyone connected.</div>
     </main>
 
     <main id="room" class="room-experience" hidden>
@@ -113,6 +129,26 @@
           <div class="participant-presence" aria-label="Room participants">
             <div id="participant-avatars" class="participant-avatars"></div>
             <div class="participant-count"><svg viewBox="0 0 24 24"><path d="M16 20v-1.5c0-2-1.8-3.5-4-3.5s-4 1.5-4 3.5V20M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM18 9a3 3 0 0 1 0 6M20 20v-1c0-1.4-.8-2.5-2-3"/></svg><span data-participant-count>1 participant</span></div>
+          </div>
+          <div class="connection-check-wrap">
+            <button id="connection-check-button" class="connection-check-button" type="button" aria-expanded="false" aria-controls="connection-check-panel" title="Check peer connections">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 16.5a10 10 0 0 1 14 0M8 13a6 6 0 0 1 8 0M11 9.7a2 2 0 0 1 2 0"/><circle cx="12" cy="19" r="1"/></svg><span>Connection</span>
+            </button>
+            <section id="connection-check-panel" class="connection-check-panel" aria-labelledby="connection-check-title" hidden>
+              <header>
+                <div><span>Peer-to-peer diagnostics</span><h2 id="connection-check-title">Connection check</h2></div>
+                <button id="connection-check-close" type="button" aria-label="Close connection check"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+              </header>
+              <div id="connection-check-summary" class="connection-check-summary" data-quality="idle">
+                <span class="connection-summary-icon"><i></i><i></i><i></i></span>
+                <span><strong>Ready to check</strong><small>Tests only run while this panel is open.</small></span>
+              </div>
+              <div id="connection-check-results" class="connection-check-results" aria-live="polite"></div>
+              <footer>
+                <span>A brief 512 KB transfer measures each direct browser connection.</span>
+                <button id="connection-check-run" type="button">Run again</button>
+              </footer>
+            </section>
           </div>
           <button id="copy-room-code" class="room-code-pill" type="button" title="Copy room code"><span>Room</span><b id="room-code-display"></b><svg viewBox="0 0 24 24"><path d="M8 8h11v11H8zM5 16V5h11"/></svg></button>
           <button id="leave-room-button" class="close-room-button" type="button"><svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg><span>Leave room</span></button>
@@ -162,7 +198,9 @@
               <div><span class="chat-live-dot"></span><h2>Chat &amp; activity</h2></div>
               <div class="chat-heading-actions">
                 <span data-participant-count>1 participant</span>
+                <button class="chat-action-toggle" data-card-notification-toggle type="button" aria-label="Turn off popup notifications" aria-pressed="true" title="Turn off popup notifications"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H9l-5 3v-4.3A2 2 0 0 1 3 15V7a2 2 0 0 1 2-2Z"/><path class="chat-toggle-off" d="m4 4 16 16"/></svg></button>
                 <button class="chat-sound-toggle" data-chat-sound-toggle type="button" aria-label="Mute notification sounds" aria-pressed="true" title="Mute notification sounds"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/><path class="chat-sound-off" d="m4 4 16 16"/></svg></button>
+                <button class="chat-action-toggle" id="chat-collapse-button" type="button" aria-label="Collapse chat" title="Collapse chat"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 7-5 5 5 5"/><path d="M20 4v16"/></svg></button>
               </div>
             </div>
             <div class="chat-messages" data-chat-messages>
@@ -175,6 +213,7 @@
             </form>
           </section>
         </aside>
+        <button id="chat-expand-button" class="chat-expand-button" type="button" aria-label="Open chat" title="Open chat"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 15a3 3 0 0 1-3 3H9l-5 3v-6a3 3 0 0 1-1-2.2V7a3 3 0 0 1 3-3h11a3 3 0 0 1 3 3v8Z"/><path d="m10 9 3 3-3 3"/></svg><span>Open chat</span></button>
       </div>
       <p class="room-privacy"><svg viewBox="0 0 24 24"><path d="M7 10V8a5 5 0 0 1 10 0v2M6 10h12v10H6z"/></svg> Every stream is peer-to-peer encrypted and travels directly between browsers.</p>
     </main>
@@ -225,6 +264,7 @@
       </form>
     </dialog>
 
+    <section id="notification-toaster" class="notification-toaster" aria-label="Room notifications" aria-live="polite" aria-atomic="false"></section>
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
   </body>
 </html>
