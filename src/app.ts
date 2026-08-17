@@ -44,6 +44,9 @@ const streamGrid = $('#stream-grid');
 const streamsEmpty = $('#streams-empty');
 const qualityMenu = $('#quality-menu');
 const toast = $('#toast');
+const joinPasswordDialog = $<HTMLDialogElement>('#join-password-dialog');
+const joinPasswordInput = $<HTMLInputElement>('#join-password');
+const joinPasswordError = $('#join-password-error');
 const appBaseUrl = new URL(document.baseURI);
 const appBasePath = appBaseUrl.pathname.replace(/\/$/, '');
 
@@ -90,6 +93,7 @@ let rtcConfig: RTCConfiguration = {
 let chatAudioContext: AudioContext | undefined;
 let chatSoundsEnabled = readChatSoundsEnabled();
 let toastTimer: ReturnType<typeof setTimeout> | undefined;
+let resolvePasswordPrompt: ((password: string | null) => void) | undefined;
 
 const hostConnections = new Map<string, ViewerEntry>();
 const presenters = new Map<string, PresenterInfo>();
@@ -197,12 +201,44 @@ async function joinRoom(id: string, password = '') {
     startNativeMesh(signaling);
     for (const participant of signaling.participants) mesh?.connect(participant.id);
   } catch (error: unknown) {
-    if (error instanceof SignalingError && error.code === 'password-required') {
-      const entered = window.prompt('Enter the password for this room:');
+    if (error instanceof SignalingError && ['password-required', 'invalid-password'].includes(error.code)) {
+      const entered = await requestRoomPassword(id, error.code === 'invalid-password');
       if (entered !== null) return joinRoom(id, entered);
+      cancelPendingJoin(id);
+      return;
     }
     endViewer(errorMessage(error, 'Could not connect to this room.'));
   }
+}
+
+function requestRoomPassword(roomId: string, invalid: boolean) {
+  $('#join-password-room').textContent = roomId;
+  joinPasswordInput.value = '';
+  joinPasswordInput.type = 'password';
+  $('#join-password-visibility').setAttribute('aria-pressed', 'false');
+  $('#join-password-visibility').setAttribute('aria-label', 'Show password');
+  const visibilityLabel = $('#join-password-visibility span');
+  visibilityLabel.textContent = 'Show';
+  joinPasswordError.textContent = invalid ? 'That password did not work. Try again.' : '';
+  joinPasswordError.hidden = !invalid;
+  joinPasswordDialog.showModal();
+  queueMicrotask(() => joinPasswordInput.focus());
+  return new Promise<string | null>((resolve) => { resolvePasswordPrompt = resolve; });
+}
+
+function finishPasswordPrompt(password: string | null) {
+  const resolve = resolvePasswordPrompt;
+  resolvePasswordPrompt = undefined;
+  if (joinPasswordDialog.open) joinPasswordDialog.close();
+  resolve?.(password);
+}
+
+function cancelPendingJoin(roomId: string) {
+  disposeConnections();
+  session.reset();
+  setScreen('landing');
+  $('#room-code').value = roomId;
+  history.replaceState({}, '', appPath());
 }
 
 function prepareRoomShell() {
@@ -1115,7 +1151,36 @@ $('#join-form').addEventListener('submit', (event) => {
   const id = normalizeRoomCode($('#room-code').value);
   if (!id) return showToast('Enter a valid room code.', 'error');
   history.replaceState({}, '', appPath(`room/${id}`));
-  void joinRoom(id, optionalInputValue('#join-password'));
+  void joinRoom(id);
+});
+
+$('#join-password-form').addEventListener('submit', (event) => {
+  event.preventDefault();
+  const password = joinPasswordInput.value;
+  if (!password) {
+    joinPasswordError.textContent = 'Enter the room password to continue.';
+    joinPasswordError.hidden = false;
+    joinPasswordInput.focus();
+    return;
+  }
+  finishPasswordPrompt(password);
+});
+
+$('.password-dialog-close').addEventListener('click', () => finishPasswordPrompt(null));
+$('.password-cancel').addEventListener('click', () => finishPasswordPrompt(null));
+joinPasswordDialog.addEventListener('cancel', (event) => {
+  event.preventDefault();
+  finishPasswordPrompt(null);
+});
+joinPasswordInput.addEventListener('input', () => { joinPasswordError.hidden = true; });
+$('#join-password-visibility').addEventListener('click', () => {
+  const button = $('#join-password-visibility');
+  const visible = joinPasswordInput.type === 'text';
+  joinPasswordInput.type = visible ? 'password' : 'text';
+  button.setAttribute('aria-pressed', String(!visible));
+  button.setAttribute('aria-label', visible ? 'Show password' : 'Hide password');
+  $('#join-password-visibility span').textContent = visible ? 'Show' : 'Hide';
+  joinPasswordInput.focus();
 });
 
 const relativePath = location.pathname.startsWith(appBasePath)

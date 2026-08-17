@@ -79,6 +79,7 @@ test('serves the app and public client configuration', async () => {
   assert.match(appClientSource, /getDisplayMedia/);
   assert.match(appClientSource, /RTCPeerConnection/);
   assert.doesNotMatch(appClientSource, /PeerJS/);
+  assert.doesNotMatch(appClientSource, /window\.prompt/);
   assert.match(appClientSource, /text-lossless-v1/);
   assert.match(appClientSource, /text-frame-start/);
   assert.match(appClientSource, /text-frame-chunk/);
@@ -91,6 +92,8 @@ test('serves the app and public client configuration', async () => {
   assert.match(page, /Create a room/);
   assert.match(page, /Start room/);
   assert.match(page, /Join a room/);
+  assert.match(page, /id="join-password-dialog"/);
+  assert.match(page, /Enter room password/);
   assert.equal((page.match(/data-room-limit-step/g) || []).length, 2);
   assert.match(page, /Chat &amp; activity/);
   assert.equal((page.match(/data-participant-count/g) || []).length, 2);

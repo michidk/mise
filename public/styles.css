@@ -587,6 +587,34 @@ body[data-screen="room"] .site-header { width: min(1440px, calc(100% - 48px)); h
 
 @keyframes spin { to { transform: rotate(360deg); } }
 
+.password-dialog { width: min(420px, calc(100% - 32px)); padding: 0; border: 0; border-radius: 20px; color: var(--ink); background: transparent; box-shadow: 0 28px 90px rgba(22,25,36,.28); }
+.password-dialog::backdrop { background: rgba(20,23,31,.48); backdrop-filter: blur(5px); }
+.password-dialog[open] { animation: password-dialog-in .18s ease-out; }
+.password-dialog form { padding: 28px; position: relative; border: 1px solid rgba(255,255,255,.58); border-radius: 20px; background: var(--white); }
+.password-dialog-close { width: 34px; height: 34px; padding: 0; position: absolute; top: 15px; right: 15px; display: grid; place-items: center; border: 0; border-radius: 9px; color: #7d7f87; background: transparent; cursor: pointer; }
+.password-dialog-close:hover { color: var(--ink); background: #efede7; }
+.password-dialog-close svg { width: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+.password-dialog-icon { width: 46px; height: 46px; margin-bottom: 18px; display: grid; place-items: center; border-radius: 14px; color: var(--blue); background: rgba(49,88,245,.09); }
+.password-dialog-icon svg { width: 23px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.password-dialog-kicker { display: block; margin-bottom: 6px; color: var(--blue); font-size: 9px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
+.password-dialog h2 { margin: 0 42px 8px 0; font-size: 23px; letter-spacing: -.04em; }
+.password-dialog form > p:not(.password-dialog-error) { margin: 0 0 22px; color: #74767e; font-size: 12px; line-height: 1.55; }
+.password-dialog form > p strong { color: #555863; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .04em; }
+.password-dialog form > label { display: block; margin-bottom: 7px; color: #62646d; font-size: 9px; font-weight: 760; }
+.password-input-wrap { height: 48px; padding-left: 13px; display: flex; align-items: center; border: 1px solid var(--line); border-radius: 11px; background: white; transition: border-color .2s, box-shadow .2s; }
+.password-input-wrap:focus-within { border-color: rgba(49,88,245,.58); box-shadow: 0 0 0 4px rgba(49,88,245,.08); }
+.password-input-wrap > svg { width: 17px; flex: 0 0 auto; fill: none; stroke: #92949b; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.password-input-wrap input { width: 100%; min-width: 0; height: 46px; padding: 0 11px; border: 0; outline: 0; color: var(--ink); background: transparent; font-size: 13px; }
+.password-input-wrap input::placeholder { color: #aaa9a5; }
+.password-input-wrap button { height: 32px; margin-right: 7px; padding: 0 9px; border: 0; border-radius: 7px; color: #747780; background: #f0eee8; cursor: pointer; font-size: 9px; font-weight: 750; }
+.password-input-wrap button:hover { color: var(--blue); background: rgba(49,88,245,.08); }
+.password-dialog-error { margin: 8px 0 0; color: #ce4141; font-size: 10px; font-weight: 650; }
+.password-dialog-actions { margin-top: 22px; display: grid; grid-template-columns: 1fr 1.35fr; gap: 9px; }
+.password-dialog-actions .button { min-height: 45px; font-size: 12px; }
+.password-cancel { border: 1px solid var(--line); color: #686a72; background: white; box-shadow: none; }
+.password-cancel:hover { background: #f0eee8; box-shadow: none; }
+@keyframes password-dialog-in { from { opacity: 0; transform: translateY(8px) scale(.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
+
 .toast { position: fixed; z-index: 100; left: 50%; bottom: 25px; padding: 12px 17px; border-radius: 10px; color: white; background: #202229; box-shadow: 0 10px 35px rgba(0,0,0,.2); font-size: 12px; font-weight: 650; opacity: 0; pointer-events: none; transform: translate(-50%, 15px); transition: opacity .2s, transform .2s; }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 .toast[data-tone="error"] { background: #c43f3f; }
@@ -661,6 +689,9 @@ body[data-screen="room"] .site-header { width: min(1440px, calc(100% - 48px)); h
   .stream-controls .quality-button { justify-content: center; }
   .stream-person small { max-width: 190px; }
   .audio-state { display: none; }
+  .password-dialog form { padding: 23px 20px 20px; }
+  .password-dialog-actions { grid-template-columns: 1fr; }
+  .password-dialog-actions .password-cancel { order: 2; }
 }
 
 @media (prefers-reduced-motion: reduce) {

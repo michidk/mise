@@ -65,7 +65,6 @@
             </div>
             <p>Enter the room code from the person sharing.</p>
             <label class="room-field" for="room-code"><span>Room code</span><input id="room-code" autocomplete="off" spellcheck="false" placeholder="e.g. abcd-2345" maxlength="32" /></label>
-            <label class="room-field" for="join-password"><span>Password <small>if required</small></span><input id="join-password" type="password" autocomplete="current-password" placeholder="Enter password" maxlength="128" /></label>
             <button class="button join-button" type="submit">
               Join room
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
@@ -189,6 +188,31 @@
       </div>
       <div class="bandwidth-card"><div><span>Estimated upload</span><strong id="bandwidth-total">0 Mbps</strong></div><small id="bandwidth-detail">Content-dependent lossless deltas × 0 peers</small><small id="bandwidth-capacity">Text mode is lossless; motion can use substantially more bandwidth.</small></div>
     </div>
+
+    <dialog id="join-password-dialog" class="password-dialog" aria-labelledby="join-password-title">
+      <form id="join-password-form" method="dialog">
+        <button class="password-dialog-close" type="button" aria-label="Cancel joining room">
+          <svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+        <span class="password-dialog-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M7 10V8a5 5 0 0 1 10 0v2M6 10h12v10H6z"/></svg>
+        </span>
+        <span class="password-dialog-kicker">Protected room</span>
+        <h2 id="join-password-title">Enter room password</h2>
+        <p>Room <strong id="join-password-room"></strong> requires a password from its host.</p>
+        <label for="join-password">Password</label>
+        <div class="password-input-wrap">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10V8a5 5 0 0 1 10 0v2M6 10h12v10H6z"/></svg>
+          <input id="join-password" type="password" autocomplete="current-password" maxlength="128" placeholder="Enter password" />
+          <button id="join-password-visibility" type="button" aria-label="Show password" aria-pressed="false"><span>Show</span></button>
+        </div>
+        <p id="join-password-error" class="password-dialog-error" role="alert" hidden></p>
+        <div class="password-dialog-actions">
+          <button class="button password-cancel" type="button">Cancel</button>
+          <button class="button button-primary" type="submit">Join room</button>
+        </div>
+      </form>
+    </dialog>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
   </body>
