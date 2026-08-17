@@ -87,7 +87,9 @@ test('serves the app and public client configuration', async () => {
   assert.equal(room.status, 200);
   const page = await room.text();
   assert.match(page, /<base href="\.\.\/" \/>/);
-  assert.match(page, /Share my screen/);
+  assert.match(page, /Start sharing/);
+  assert.match(page, /Start room/);
+  assert.match(page, /Join a room/);
   assert.match(page, /Chat &amp; activity/);
   assert.equal((page.match(/data-participant-count/g) || []).length, 2);
   assert.match(page, /Lossless text pipeline/);

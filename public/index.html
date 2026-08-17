@@ -31,29 +31,41 @@
         <h1>Show your screen.<br /><span>Nothing else.</span></h1>
         <p class="hero-description">A private screen share that runs in your browser. Start a room, send the link, and you’re live.</p>
 
-        <div class="hero-actions">
-          <div class="share-start">
-            <button id="share-button" class="button button-primary" type="button">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4h13A1.5 1.5 0 0 1 20 5.5v9a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 14.5v-9ZM8 20h8M12 16v4"/></svg>
-              Share my screen
-            </button>
-            <label class="audio-option">
-              <input type="checkbox" data-share-audio />
-              <span class="audio-switch" aria-hidden="true"><i></i></span>
-              <span>Share audio</span>
-            </label>
+        <div class="hero-actions" aria-label="Room actions">
+          <section class="room-action-card start-room-card">
+            <div class="action-card-heading">
+              <span class="action-card-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4h13A1.5 1.5 0 0 1 20 5.5v9a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 14.5v-9ZM8 20h8M12 16v4"/></svg>
+              </span>
+              <span><small>Host a room</small><strong>Start sharing</strong></span>
+            </div>
+            <p>Open a private room, then send the invite link.</p>
             <div class="room-create-options">
-              <label><span>Password</span><input id="room-password" type="password" maxlength="128" autocomplete="new-password" placeholder="Optional" /></label>
+              <label><span>Password <small>Optional</small></span><input id="room-password" type="password" maxlength="128" autocomplete="new-password" placeholder="Add a password" /></label>
               <label><span>People</span><input id="room-limit" type="number" min="2" max="6" value="6" inputmode="numeric" /></label>
             </div>
-          </div>
-          <span class="action-or">or</span>
-          <form id="join-form" class="join-form">
-            <label class="sr-only" for="room-code">Room code</label>
-            <input id="room-code" autocomplete="off" spellcheck="false" placeholder="Enter a room code" maxlength="32" />
-            <label class="sr-only" for="join-password">Room password</label>
-            <input id="join-password" type="password" autocomplete="current-password" placeholder="Password (if set)" maxlength="128" />
-            <button type="submit" aria-label="Join room">
+            <label class="audio-option audio-option-card">
+              <input type="checkbox" data-share-audio />
+              <span class="audio-switch" aria-hidden="true"><i></i></span>
+              <span><strong>Include shared audio</strong><small>When the browser supports it</small></span>
+            </label>
+            <button id="share-button" class="button button-primary" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4h13A1.5 1.5 0 0 1 20 5.5v9a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 14.5v-9ZM8 20h8M12 16v4"/></svg>
+              Start room
+            </button>
+          </section>
+          <form id="join-form" class="room-action-card join-form">
+            <div class="action-card-heading">
+              <span class="action-card-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M14 8l4 4-4 4M18 12H8M10 4H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h5"/></svg>
+              </span>
+              <span><small>Have an invite?</small><strong>Join a room</strong></span>
+            </div>
+            <p>Enter the room code from the person sharing.</p>
+            <label class="room-field" for="room-code"><span>Room code</span><input id="room-code" autocomplete="off" spellcheck="false" placeholder="e.g. abcd-2345" maxlength="32" /></label>
+            <label class="room-field" for="join-password"><span>Password <small>if required</small></span><input id="join-password" type="password" autocomplete="current-password" placeholder="Enter password" maxlength="128" /></label>
+            <button class="button join-button" type="submit">
+              Join room
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
             </button>
           </form>
