@@ -18,14 +18,13 @@ const indexHtml = readFileSync(path.join(publicDirectory, 'index.html'), 'utf8')
 const landingHtml = indexHtml.replace('<base href="/" />', '<base href="./" />');
 const roomHtml = indexHtml.replace('<base href="/" />', '<base href="../" />');
 
-if (process.env.VERCEL && !process.env.DATABASE_URL) {
-  throw new Error('DATABASE_URL is required for shared room signaling on Vercel.');
-}
+const databaseUrl = process.env.DATABASE_URL;
+if (!databaseUrl) throw new Error('DATABASE_URL is required for room signaling.');
 
 const app = express();
 const server = http.createServer(app);
 const roomApi = createRoomApi({
-  databaseUrl: process.env.DATABASE_URL,
+  databaseUrl,
   maximumParticipants: MAX_PARTICIPANTS,
 });
 

@@ -10,7 +10,7 @@ Live demo: [miseshare.vercel.app](https://miseshare.vercel.app)
 
 If a direct connection fails, use [icecheck](https://github.com/michidk/icecheck) ([live tool](https://icecheck.vercel.app)) to isolate signaling, ICE candidate, data-channel, and media-path problems between two browsers.
 
-WebRTC data channels carry lossless screen deltas directly between browsers. A small REST API stores temporary room admission and WebRTC signaling messages in PostgreSQL; it never receives screen, chat, or audio data.
+Native WebRTC video tracks carry the 720p, 1080p, and 60 fps screen-sharing presets directly between browsers. A separate lossless text mode sends pixel-exact tile deltas over WebRTC data channels. A small REST API stores temporary room admission and WebRTC signaling messages in PostgreSQL; it never receives screen, chat, or audio data.
 
 The Node server and browser application are authored in strict TypeScript. The client build compiles `src/app.ts` to the browser bundle in `public/app.js`.
 
@@ -18,18 +18,15 @@ The Node server and browser application are authored in strict TypeScript. The c
 
 ```bash
 npm install
+npm run db:up
+export DATABASE_URL='postgresql://mise:mise@127.0.0.1:54329/mise'
+npm run db:migrate
 npm run dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000). Screen capture works on `localhost`; a deployed instance must use HTTPS.
 
-Without `DATABASE_URL`, local development uses an in-memory room store. The PostgreSQL schema is defined with Drizzle ORM in `src/room-api/internal/schema.ts`, with generated migrations tracked in `drizzle/`. To exercise the production data path, set a PostgreSQL connection string and apply the migrations first:
-
-```bash
-export DATABASE_URL='postgresql://...'
-npm run db:migrate
-npm run dev
-```
+Local development uses the PostgreSQL service in `compose.yaml`, bound to loopback on port `54329`. `DATABASE_URL` is mandatory in every environment; there is no in-memory fallback. The schema is defined with Drizzle ORM in `src/room-api/internal/schema.ts`, with generated migrations tracked in `drizzle/`.
 
 After changing the schema, generate and validate a migration before applying it:
 
@@ -60,7 +57,7 @@ Vercel serves files in `public/` from its CDN and runs the room REST API as stat
 | `HOST` | `0.0.0.0` | HTTP bind address |
 | `BASE_PATH` | _(empty)_ | Optional URL prefix, such as `/previews/mise` |
 | `MAX_PARTICIPANTS` | `12` | Deployment ceiling for total room participants, including the host (2–12) |
-| `DATABASE_URL` | _(in-memory locally)_ | PostgreSQL connection string; required on Vercel |
+| `DATABASE_URL` | _(required)_ | PostgreSQL connection string; use Docker locally and Neon in production |
 | `STUN_URLS` | `stun:main.lohr.dev:3478,stun:stun.l.google.com:19302` | Comma-separated STUN URLs; the second default is a public fallback and non-STUN entries are ignored |
 
 Browsers receive both defaults and may query them concurrently; WebRTC does not guarantee a strictly sequential failover order.
@@ -78,9 +75,9 @@ The app is intentionally STUN-only and does not configure a TURN relay. Connecti
 - Stream audio is kept on a separate native WebRTC media track. Publishers can stop sending it without restarting the screen codec, and every receiver can mute each incoming stream independently.
 - Codec settings and stream ownership are room metadata. Cards show the host, current codec settings, and audio state without coupling the UI to the encoder implementation.
 - A host-coordinated activity log records joins, leaves, stream starts/stops, audio changes, and settings changes alongside chat. Only the latest 100 entries live in the host's browser memory.
-- `src/room-api/index.ts` is the server boundary for room admission and signaling storage. Its Drizzle/PostgreSQL and in-memory implementations remain internal.
+- `src/room-api/index.ts` is the server boundary for room admission and signaling storage. Its Drizzle/PostgreSQL implementation remains internal.
 - `src/signaling/index.ts` is the browser boundary for REST room lifecycle, heartbeat, and signaling mailboxes.
-- `src/rtc/index.ts` owns native WebRTC negotiation, fixed control/screen channels, MessagePack serialization, and audio transceivers.
+- `src/rtc/index.ts` owns native WebRTC negotiation, fixed control/screen channels, MessagePack serialization, and audio/video transceivers.
 - `src/media/index.ts` owns encoder, renderer, backpressure, and presentation cleanup. `src/room/index.ts` owns validated host/viewer messages and UI session state.
 - There is no recording, analytics, account system, TURN relay, or backend media path.
 

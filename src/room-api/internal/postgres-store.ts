@@ -75,8 +75,7 @@ export class PostgresRoomStore implements RoomStore {
         .orderBy(roomParticipants.joinedAt);
       if (members.length >= room.maxParticipants) return { status: 'full' };
 
-      const guestNumber = members.filter((member) => !member.isHost).length + 1;
-      await insertParticipant(transaction, { ...participant, name: `Guest ${guestNumber}` });
+      await insertParticipant(transaction, participant);
       return { status: 'joined', participants: members.map(mapParticipant) };
     });
   }

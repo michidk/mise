@@ -1,4 +1,6 @@
-import type { TextCodecSettings } from '../media/index.js';
+import type { NativeVideoSettings, TextCodecSettings } from '../media/index.js';
+
+export type RoomStreamSettings = TextCodecSettings | NativeVideoSettings;
 
 export type ActivityKind = 'joined' | 'left' | 'stream-started' | 'stream-stopped' | 'audio' | 'settings';
 
@@ -7,7 +9,7 @@ export interface PresenterInfo {
   name: string;
   isHost: boolean;
   audioEnabled: boolean;
-  settings: TextCodecSettings;
+  settings: RoomStreamSettings;
 }
 
 export interface ChatMessage {
@@ -45,9 +47,9 @@ export type HostRoomMessage =
   | { type: 'participant-joined' | 'participant-left'; peerId: string };
 
 export type ViewerRoomMessage =
-  | { type: 'stream-started'; streamSettings?: TextCodecSettings; audioEnabled: boolean }
+  | { type: 'stream-started'; streamSettings?: RoomStreamSettings; audioEnabled: boolean }
   | { type: 'stop-presenting' }
-  | { type: 'settings-changed' | 'settings-selected'; streamSettings: TextCodecSettings }
+  | { type: 'settings-changed' | 'settings-selected'; streamSettings: RoomStreamSettings }
   | { type: 'audio-changed'; audioEnabled: boolean }
   | { type: 'chat'; text: string };
 

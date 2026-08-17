@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import net from 'node:net';
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -52,6 +52,17 @@ after(() => {
   app?.kill('SIGTERM');
 });
 
+test('refuses to start without a PostgreSQL connection', () => {
+  const { DATABASE_URL: _, VERCEL: __, ...env } = process.env;
+  const result = spawnSync(process.execPath, ['--import', 'tsx', 'server.ts'], {
+    cwd: new URL('..', import.meta.url),
+    env,
+    encoding: 'utf8',
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /DATABASE_URL is required for room signaling/);
+});
+
 test('serves the app and public client configuration', async () => {
   const health = await fetch(`${baseUrl}/health`).then((response) => response.json());
   const configResponse = await fetch(`${baseUrl}/config`);
@@ -97,10 +108,11 @@ test('serves the app and public client configuration', async () => {
   assert.equal((page.match(/data-room-limit-step/g) || []).length, 2);
   assert.match(page, /Chat &amp; activity/);
   assert.equal((page.match(/data-participant-count/g) || []).length, 2);
-  assert.match(page, /Lossless text pipeline/);
-  assert.match(page, /Text responsive/);
-  assert.match(page, /Smooth motion/);
-  assert.match(page, /Pixel-exact tile deltas/);
+  assert.match(page, /Stream quality/);
+  assert.match(page, /720p 60 FPS/);
+  assert.match(page, /1080p 60 FPS/);
+  assert.match(page, /Choose resolution, frame rate, and compression/);
+  assert.match(page, /Browser video encoder/);
   assert.match(page, /Estimated upload/);
   assert.match(page, /id="stream-grid"/);
   assert.match(page, /id="leave-room-button"/);
@@ -147,6 +159,7 @@ test('room API enforces passwords and participant limits', async () => {
   assert.equal(joinedResponse.status, 201);
   const viewer = await joinedResponse.json();
   assert.equal(viewer.hostId, host.hostId);
+  assert.match(viewer.participant.name, /^Anonymous [A-Z][a-z]+$/);
   assert.deepEqual(viewer.participants.map(({ id }) => id), [host.participant.id]);
 
   const fullResponse = await roomRequest(`/${host.roomId}/join`, {

@@ -110,7 +110,10 @@
           <div><span id="room-kicker">Connecting</span><h1 id="room-title">Room</h1></div>
         </div>
         <div class="room-topbar-actions">
-          <div class="participant-count"><svg viewBox="0 0 24 24"><path d="M16 20v-1.5c0-2-1.8-3.5-4-3.5s-4 1.5-4 3.5V20M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM18 9a3 3 0 0 1 0 6M20 20v-1c0-1.4-.8-2.5-2-3"/></svg><span data-participant-count>1 participant</span></div>
+          <div class="participant-presence" aria-label="Room participants">
+            <div id="participant-avatars" class="participant-avatars"></div>
+            <div class="participant-count"><svg viewBox="0 0 24 24"><path d="M16 20v-1.5c0-2-1.8-3.5-4-3.5s-4 1.5-4 3.5V20M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM18 9a3 3 0 0 1 0 6M20 20v-1c0-1.4-.8-2.5-2-3"/></svg><span data-participant-count>1 participant</span></div>
+          </div>
           <button id="copy-room-code" class="room-code-pill" type="button" title="Copy room code"><span>Room</span><b id="room-code-display"></b><svg viewBox="0 0 24 24"><path d="M8 8h11v11H8zM5 16V5h11"/></svg></button>
           <button id="leave-room-button" class="close-room-button" type="button"><svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg><span>Leave room</span></button>
         </div>
@@ -142,7 +145,7 @@
             <div class="quality-settings">
               <button id="quality-button" class="quality-button" data-quality-trigger type="button" aria-expanded="false" aria-controls="quality-menu">
                 <svg viewBox="0 0 24 24"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H3v-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.6V3h4v.1a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/></svg>
-                <span id="quality-label">Balanced</span><svg class="chevron" viewBox="0 0 24 24"><path d="m8 10 4 4 4-4"/></svg>
+                <span id="quality-label">720p</span><svg class="chevron" viewBox="0 0 24 24"><path d="m8 10 4 4 4-4"/></svg>
               </button>
             </div>
             <button id="stream-button" class="button button-primary stream-button" type="button" disabled><svg viewBox="0 0 24 24"><path d="M4 5h16v12H4zM8 21h8M12 17v4"/></svg><span>Start sharing</span></button>
@@ -177,14 +180,22 @@
     </main>
 
     <div id="quality-menu" class="quality-menu" hidden>
-      <div class="quality-menu-heading"><strong>Lossless text pipeline</strong><span>Applied live</span></div>
-      <button type="button" data-quality="efficient"><span><strong>Text efficient</strong><small>Native pixels · 4 fps · maximum compression</small></span><i></i></button>
-      <button type="button" data-quality="balanced" class="active"><span><strong>Lossless text</strong><small>Native pixels · 6 fps · balanced compression</small></span><i></i></button>
-      <button type="button" data-quality="responsive"><span><strong>Text responsive</strong><small>Native pixels · 10 fps · faster updates</small></span><i></i></button>
-      <button type="button" disabled><span><strong>Smooth motion</strong><small>1080p · 60 fps · planned video pipeline</small></span><span class="coming-soon">Later</span></button>
-      <div class="pipeline-summary">
-        <span>Pixel-exact tile deltas</span><b>DEFLATE</b>
-        <p>Only changed 128 px tiles are sent. A fresh lossless keyframe repairs the stream every 15 seconds.</p>
+      <div class="quality-menu-heading"><strong>Stream quality</strong><span>Applied live</span></div>
+      <button type="button" data-quality="text"><span><strong>Text</strong><small>Native resolution · 6 fps · pixel-perfect</small></span><i></i></button>
+      <button type="button" data-quality="720p" class="active"><span><strong>720p</strong><small>30 fps · balanced bandwidth</small></span><i></i></button>
+      <button type="button" data-quality="720p60"><span><strong>720p 60 FPS</strong><small>Smoother motion · higher bandwidth</small></span><i></i></button>
+      <button type="button" data-quality="1080p"><span><strong>1080p</strong><small>30 fps · sharper video</small></span><i></i></button>
+      <button type="button" data-quality="1080p60"><span><strong>1080p 60 FPS</strong><small>Sharpest preset · highest bandwidth</small></span><i></i></button>
+      <button type="button" data-quality="custom" aria-expanded="false" aria-controls="custom-quality-panel"><span><strong>Custom</strong><small>Choose resolution, frame rate, and compression</small></span><i></i></button>
+      <div id="custom-quality-panel" class="advanced-panel" hidden>
+        <label><span>Resolution</span><select id="custom-resolution"><option value="1280x720">720p</option><option value="1920x1080" selected>1080p</option><option value="2560x1440">1440p</option><option value="3840x2160">4K</option></select></label>
+        <label><span>Frame rate</span><select id="custom-frame-rate"><option value="15">15 fps</option><option value="30" selected>30 fps</option><option value="60">60 fps</option></select></label>
+        <label><span>Compression</span><select id="custom-compression"><option value="high">High · less bandwidth</option><option value="balanced" selected>Balanced</option><option value="low">Low · best quality</option></select></label>
+        <button id="apply-custom-quality" class="apply-advanced" type="button">Apply custom settings</button>
+      </div>
+      <div id="pipeline-summary" class="pipeline-summary">
+        <span>Browser video encoder</span><b>WebRTC</b>
+        <p>Resolution, frame rate, and bitrate are handled by the browser's native WebRTC media pipeline.</p>
       </div>
       <div class="bandwidth-card"><div><span>Estimated upload</span><strong id="bandwidth-total">0 Mbps</strong></div><small id="bandwidth-detail">Content-dependent lossless deltas × 0 peers</small><small id="bandwidth-capacity">Text mode is lossless; motion can use substantially more bandwidth.</small></div>
     </div>

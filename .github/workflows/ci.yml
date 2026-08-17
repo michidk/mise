@@ -11,6 +11,22 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: mise
+          POSTGRES_USER: mise
+          POSTGRES_PASSWORD: mise
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mise -d mise"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://mise:mise@127.0.0.1:5432/mise
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

@@ -12,7 +12,7 @@ export interface TextPresentation {
   hasConnection(participantId: string): boolean;
   audioTracks(): MediaStreamTrack[];
   setAudioEnabled(enabled: boolean): void;
-  stop(): void;
+  stop(stopTracks?: boolean): void;
 }
 
 export function createTextPresentation(stream: MediaStream, settings: TextCodecSettings): TextPresentation {
@@ -64,12 +64,12 @@ class BrowserTextPresentation implements TextPresentation {
     for (const track of this.audioTracks()) track.enabled = enabled;
   }
 
-  stop() {
+  stop(stopTracks = true) {
     if (this.stopped) return;
     this.stopped = true;
     this.encoder.stop();
     this.broadcaster.close(false);
-    for (const track of this.stream.getTracks()) {
+    if (stopTracks) for (const track of this.stream.getTracks()) {
       track.onended = null;
       track.stop();
     }

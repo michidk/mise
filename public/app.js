@@ -1370,17 +1370,20 @@ var BrowserTextPresentation = class {
   setAudioEnabled(enabled) {
     for (const track of this.audioTracks()) track.enabled = enabled;
   }
-  stop() {
+  stop(stopTracks = true) {
     if (this.stopped) return;
     this.stopped = true;
     this.encoder.stop();
     this.broadcaster.close(false);
-    for (const track of this.stream.getTracks()) {
+    if (stopTracks) for (const track of this.stream.getTracks()) {
       track.onended = null;
       track.stop();
     }
   }
 };
+
+// src/media/pipeline.ts
+var NATIVE_VIDEO_CODEC_ID = "webrtc-video-v1";
 
 // src/room/internal/protocol.ts
 var ACTIVITY_KINDS = /* @__PURE__ */ new Set(["joined", "left", "stream-started", "stream-stopped", "audio", "settings"]);
@@ -1437,14 +1440,14 @@ function parseViewerRoomMessage(value) {
     case "stream-started":
       return {
         type: "stream-started",
-        streamSettings: parseTextSettings(message.streamSettings),
+        streamSettings: parseStreamSettings(message.streamSettings),
         audioEnabled: message.audioEnabled === true
       };
     case "stop-presenting":
       return { type: "stop-presenting" };
     case "settings-changed":
     case "settings-selected": {
-      const streamSettings = parseTextSettings(message.streamSettings);
+      const streamSettings = parseStreamSettings(message.streamSettings);
       return streamSettings ? { type: message.type, streamSettings } : void 0;
     }
     case "audio-changed":
@@ -1462,7 +1465,7 @@ function parsePresenter(value, hostId) {
   if (!presenter) return void 0;
   const id = peerId(presenter.id);
   const name = boundedString(presenter.name, 40);
-  const settings = parseTextSettings(presenter.settings);
+  const settings = parseStreamSettings(presenter.settings);
   if (!id || !name || typeof presenter.audioEnabled !== "boolean" || !settings) return void 0;
   return { id, name, isHost: id === hostId, audioEnabled: presenter.audioEnabled, settings };
 }
@@ -1476,6 +1479,24 @@ function parseTextSettings(value) {
     frameRate: settings.frameRate,
     compressionLevel: settings.compressionLevel,
     tileSize: settings.tileSize,
+    label,
+    buttonLabel
+  } : void 0;
+}
+function parseStreamSettings(value) {
+  const text = parseTextSettings(value);
+  if (text) return text;
+  const settings = record(value);
+  if (!settings || settings.codec !== NATIVE_VIDEO_CODEC_ID || !validInteger2(settings.frameRate, 1, 60) || !validInteger2(settings.width, 320, 3840) || !validInteger2(settings.height, 180, 2160) || !validInteger2(settings.bitrate, 1e5, 5e7) || !["high", "balanced", "low"].includes(String(settings.compression))) return void 0;
+  const label = boundedString(settings.label, 80);
+  const buttonLabel = boundedString(settings.buttonLabel, 40);
+  return label && buttonLabel ? {
+    codec: NATIVE_VIDEO_CODEC_ID,
+    frameRate: settings.frameRate,
+    width: settings.width,
+    height: settings.height,
+    bitrate: settings.bitrate,
+    compression: settings.compression,
     label,
     buttonLabel
   } : void 0;
@@ -1616,6 +1637,95 @@ var RoomSession = class {
     this.current = { ...INITIAL_STATE };
   }
 };
+
+// src/room/internal/guest-identity.ts
+var ANIMALS = [
+  ["Alpaca", "\u{1F999}"],
+  ["Axolotl", "\u{1F98E}"],
+  ["Badger", "\u{1F9A1}"],
+  ["Bat", "\u{1F987}"],
+  ["Bear", "\u{1F43B}"],
+  ["Beaver", "\u{1F9AB}"],
+  ["Bee", "\u{1F41D}"],
+  ["Bison", "\u{1F9AC}"],
+  ["Butterfly", "\u{1F98B}"],
+  ["Camel", "\u{1F42B}"],
+  ["Capybara", "\u{1F9A6}"],
+  ["Cat", "\u{1F408}"],
+  ["Chameleon", "\u{1F98E}"],
+  ["Cheetah", "\u{1F406}"],
+  ["Chicken", "\u{1F414}"],
+  ["Chipmunk", "\u{1F43F}\uFE0F"],
+  ["Cobra", "\u{1F40D}"],
+  ["Cow", "\u{1F404}"],
+  ["Crab", "\u{1F980}"],
+  ["Crocodile", "\u{1F40A}"],
+  ["Deer", "\u{1F98C}"],
+  ["Dodo", "\u{1F9A4}"],
+  ["Dolphin", "\u{1F42C}"],
+  ["Duck", "\u{1F986}"],
+  ["Eagle", "\u{1F985}"],
+  ["Elephant", "\u{1F418}"],
+  ["Flamingo", "\u{1F9A9}"],
+  ["Fox", "\u{1F98A}"],
+  ["Frog", "\u{1F438}"],
+  ["Giraffe", "\u{1F992}"],
+  ["Goat", "\u{1F410}"],
+  ["Gorilla", "\u{1F98D}"],
+  ["Hedgehog", "\u{1F994}"],
+  ["Hippo", "\u{1F99B}"],
+  ["Horse", "\u{1F40E}"],
+  ["Hummingbird", "\u{1F426}"],
+  ["Kangaroo", "\u{1F998}"],
+  ["Koala", "\u{1F428}"],
+  ["Ladybug", "\u{1F41E}"],
+  ["Leopard", "\u{1F406}"],
+  ["Lion", "\u{1F981}"],
+  ["Llama", "\u{1F999}"],
+  ["Lobster", "\u{1F99E}"],
+  ["Manatee", "\u{1F9AD}"],
+  ["Monkey", "\u{1F412}"],
+  ["Moose", "\u{1F9A4}"],
+  ["Mouse", "\u{1F401}"],
+  ["Octopus", "\u{1F419}"],
+  ["Orangutan", "\u{1F9A7}"],
+  ["Otter", "\u{1F9A6}"],
+  ["Owl", "\u{1F989}"],
+  ["Panda", "\u{1F43C}"],
+  ["Parrot", "\u{1F99C}"],
+  ["Peacock", "\u{1F99A}"],
+  ["Penguin", "\u{1F427}"],
+  ["Porcupine", "\u{1F994}"],
+  ["Rabbit", "\u{1F407}"],
+  ["Raccoon", "\u{1F99D}"],
+  ["Rhino", "\u{1F98F}"],
+  ["Seal", "\u{1F9AD}"],
+  ["Shark", "\u{1F988}"],
+  ["Sloth", "\u{1F9A5}"],
+  ["Snail", "\u{1F40C}"],
+  ["Swan", "\u{1F9A2}"],
+  ["Tiger", "\u{1F405}"],
+  ["Toucan", "\u{1F99C}"],
+  ["Turtle", "\u{1F422}"],
+  ["Walrus", "\u{1F9AD}"],
+  ["Whale", "\u{1F40B}"],
+  ["Wolf", "\u{1F43A}"],
+  ["Wombat", "\u{1F43B}"],
+  ["Zebra", "\u{1F993}"]
+];
+function guestIdentity(participantId) {
+  const hash = hashString(participantId);
+  const animal = ANIMALS[hash % ANIMALS.length];
+  return { name: `Anonymous ${animal[0]}`, emoji: animal[1], color: hash % 8 };
+}
+function hashString(value) {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
 
 // node_modules/@msgpack/msgpack/dist.esm/utils/utf8.mjs
 function utf8Count(str) {
@@ -3115,6 +3225,8 @@ var RtcMesh = class {
   }
   peers = /* @__PURE__ */ new Map();
   audioTrack = null;
+  videoTrack = null;
+  videoBitrate;
   closed = false;
   connect(peerId2) {
     const peer = this.ensurePeer(peerId2);
@@ -3171,6 +3283,14 @@ var RtcMesh = class {
     this.audioTrack = track;
     await Promise.all([...this.peers.values()].map((peer) => peer.audioSender.replaceTrack(track)));
   }
+  async setVideoTrack(track, bitrate) {
+    this.videoTrack = track;
+    this.videoBitrate = bitrate;
+    await Promise.all([...this.peers.values()].map(async (peer) => {
+      await peer.videoSender.replaceTrack(track);
+      await this.applyVideoBitrate(peer.videoSender);
+    }));
+  }
   closePeer(peerId2) {
     const peer = this.peers.get(peerId2);
     if (!peer) return;
@@ -3192,12 +3312,14 @@ var RtcMesh = class {
     const control = new NativeRtcChannel(peerId2, connection.createDataChannel("control", { negotiated: true, id: 0, ordered: true }));
     const screen = new NativeRtcChannel(peerId2, connection.createDataChannel("screen", { negotiated: true, id: 1, ordered: true }));
     const audioSender = connection.addTransceiver("audio", { direction: "sendrecv" }).sender;
+    const videoSender = connection.addTransceiver("video", { direction: "sendrecv" }).sender;
     const peer = {
       peerId: peerId2,
       connection,
       control,
       screen,
       audioSender,
+      videoSender,
       makingOffer: false,
       ignoreOffer: false,
       settingRemoteAnswer: false,
@@ -3209,12 +3331,23 @@ var RtcMesh = class {
       if (event.candidate) void this.send(peerId2, "candidate", event.candidate.toJSON());
     });
     connection.addEventListener("negotiationneeded", () => void this.negotiate(peer));
-    connection.addEventListener("track", (event) => this.events.audioTrack?.(peerId2, event.track, event.streams));
+    connection.addEventListener("track", (event) => this.events.mediaTrack?.(peerId2, event.track, event.streams));
     connection.addEventListener("connectionstatechange", () => {
       if (["failed", "closed"].includes(connection.connectionState)) this.closePeer(peerId2);
     });
     if (this.audioTrack) void audioSender.replaceTrack(this.audioTrack);
+    if (this.videoTrack) void videoSender.replaceTrack(this.videoTrack).then(() => this.applyVideoBitrate(videoSender));
     return peer;
+  }
+  async applyVideoBitrate(sender) {
+    if (!this.videoBitrate) return;
+    const parameters = sender.getParameters();
+    parameters.encodings ||= [{}];
+    parameters.encodings[0].maxBitrate = this.videoBitrate;
+    try {
+      await sender.setParameters(parameters);
+    } catch {
+    }
   }
   async negotiate(peer) {
     if (this.closed || peer.makingOffer || peer.connection.signalingState !== "stable") return;
@@ -3408,32 +3541,59 @@ var streamGrid = $("#stream-grid");
 var streamsEmpty = $("#streams-empty");
 var qualityMenu = $("#quality-menu");
 var toast = $("#toast");
+var joinPasswordDialog = $("#join-password-dialog");
+var joinPasswordInput = $("#join-password");
+var joinPasswordError = $("#join-password-error");
 var appBaseUrl = new URL(document.baseURI);
 var appBasePath = appBaseUrl.pathname.replace(/\/$/, "");
 var qualityPresets = {
-  efficient: {
-    codec: TEXT_CODEC_ID,
-    frameRate: 4,
-    compressionLevel: 8,
-    tileSize: 128,
-    label: "Native pixels \xB7 4 fps \xB7 DEFLATE 8",
-    buttonLabel: "Text efficient"
-  },
-  balanced: {
+  text: {
     codec: TEXT_CODEC_ID,
     frameRate: 6,
     compressionLevel: 6,
     tileSize: 128,
-    label: "Native pixels \xB7 6 fps \xB7 DEFLATE 6",
-    buttonLabel: "Lossless text"
+    label: "Native resolution \xB7 6 fps \xB7 lossless",
+    buttonLabel: "Text"
   },
-  responsive: {
-    codec: TEXT_CODEC_ID,
-    frameRate: 10,
-    compressionLevel: 4,
-    tileSize: 128,
-    label: "Native pixels \xB7 10 fps \xB7 DEFLATE 4",
-    buttonLabel: "Text responsive"
+  "720p": {
+    codec: NATIVE_VIDEO_CODEC_ID,
+    frameRate: 30,
+    width: 1280,
+    height: 720,
+    bitrate: 25e5,
+    compression: "balanced",
+    label: "720p \xB7 30 fps \xB7 balanced compression",
+    buttonLabel: "720p"
+  },
+  "720p60": {
+    codec: NATIVE_VIDEO_CODEC_ID,
+    frameRate: 60,
+    width: 1280,
+    height: 720,
+    bitrate: 4e6,
+    compression: "balanced",
+    label: "720p \xB7 60 fps \xB7 balanced compression",
+    buttonLabel: "720p 60 FPS"
+  },
+  "1080p": {
+    codec: NATIVE_VIDEO_CODEC_ID,
+    frameRate: 30,
+    width: 1920,
+    height: 1080,
+    bitrate: 5e6,
+    compression: "balanced",
+    label: "1080p \xB7 30 fps \xB7 balanced compression",
+    buttonLabel: "1080p"
+  },
+  "1080p60": {
+    codec: NATIVE_VIDEO_CODEC_ID,
+    frameRate: 60,
+    width: 1920,
+    height: 1080,
+    bitrate: 8e6,
+    compression: "balanced",
+    label: "1080p \xB7 60 fps \xB7 balanced compression",
+    buttonLabel: "1080p 60 FPS"
   }
 };
 var mesh;
@@ -3443,21 +3603,22 @@ var viewerControl;
 var localPresentation;
 var shareAudioEnabled = false;
 var maxParticipants = 12;
-var guestNumber = 0;
-var currentQuality = "balanced";
-var currentStreamSettings = { ...qualityPresets.balanced };
+var currentStreamSettings = { ...qualityPresets["720p"] };
 var rtcConfig = {
   iceServers: [{ urls: ["stun:main.lohr.dev:3478", "stun:stun.l.google.com:19302"] }]
 };
 var chatAudioContext;
 var chatSoundsEnabled = readChatSoundsEnabled();
 var toastTimer;
+var resolvePasswordPrompt;
 var hostConnections = /* @__PURE__ */ new Map();
 var presenters = /* @__PURE__ */ new Map();
 var peerChannels = /* @__PURE__ */ new Map();
 var incomingTextReceivers = /* @__PURE__ */ new Map();
+var remoteVideoStreams = /* @__PURE__ */ new Map();
 var remoteAudioElements = /* @__PURE__ */ new Map();
 var mutedPresenters = /* @__PURE__ */ new Set();
+var participantIds = /* @__PURE__ */ new Set();
 var chatHistory = [];
 var configReady = fetch(appPath("config")).then((response) => response.json()).then((config) => {
   rtcConfig = { iceServers: config.iceServers };
@@ -3492,17 +3653,85 @@ function normalizeRoomCode(value) {
 }
 async function captureDisplay() {
   if (!navigator.mediaDevices?.getDisplayMedia) throw new Error("Screen sharing is not supported in this browser.");
+  const video = currentStreamSettings.codec === NATIVE_VIDEO_CODEC_ID ? {
+    width: { ideal: currentStreamSettings.width, max: currentStreamSettings.width },
+    height: { ideal: currentStreamSettings.height, max: currentStreamSettings.height },
+    frameRate: { ideal: currentStreamSettings.frameRate, max: currentStreamSettings.frameRate }
+  } : { frameRate: { ideal: currentStreamSettings.frameRate, max: 12 } };
   const stream = await navigator.mediaDevices.getDisplayMedia({
-    video: { frameRate: { ideal: currentStreamSettings.frameRate, max: Math.max(12, currentStreamSettings.frameRate) } },
+    video,
     audio: shareAudioEnabled
   });
   const videoTrack = stream.getVideoTracks()[0];
-  videoTrack.contentHint = "detail";
+  videoTrack.contentHint = currentStreamSettings.codec === TEXT_CODEC_ID || currentStreamSettings.frameRate < 60 ? "detail" : "motion";
   videoTrack.onended = () => stopLocalPresentation();
   if (shareAudioEnabled && stream.getAudioTracks().length === 0) {
     showToast("Audio was not available for the selected screen.", "error");
   }
   return stream;
+}
+function createLocalPresentation(stream, settings) {
+  if (settings.codec === TEXT_CODEC_ID) {
+    const videoTrack = stream.getVideoTracks()[0];
+    if (videoTrack) videoTrack.contentHint = "detail";
+    const text = createTextPresentation(stream, settings);
+    return {
+      stream,
+      videoTrack: text.videoTrack,
+      codec: TEXT_CODEC_ID,
+      start: () => text.start(),
+      updateSettings: (next) => {
+        if (next.codec === TEXT_CODEC_ID) text.updateSettings(next);
+      },
+      connect: (participantId, channel) => text.connect(participantId, channel),
+      disconnect: (participantId) => text.disconnect(participantId),
+      audioTracks: () => text.audioTracks(),
+      setAudioEnabled: (enabled) => text.setAudioEnabled(enabled),
+      stop: (stopTracks) => text.stop(stopTracks)
+    };
+  }
+  let stopped = false;
+  return {
+    stream,
+    videoTrack: stream.getVideoTracks()[0],
+    codec: NATIVE_VIDEO_CODEC_ID,
+    start: async () => applyVideoConstraints(stream.getVideoTracks()[0], settings),
+    updateSettings: (next) => {
+      if (!stopped && next.codec === NATIVE_VIDEO_CODEC_ID) void applyVideoConstraints(stream.getVideoTracks()[0], next);
+    },
+    connect: () => {
+    },
+    disconnect: () => {
+    },
+    audioTracks: () => stream.getAudioTracks().filter((track) => track.readyState === "live"),
+    setAudioEnabled: (enabled) => {
+      for (const track of stream.getAudioTracks()) track.enabled = enabled;
+    },
+    stop: (stopTracks = true) => {
+      stopped = true;
+      if (stopTracks) stopMediaStream(stream);
+    }
+  };
+}
+async function applyVideoConstraints(track, settings) {
+  if (!track) return;
+  track.contentHint = settings.frameRate >= 60 ? "motion" : "detail";
+  try {
+    await track.applyConstraints({
+      width: { ideal: settings.width, max: settings.width },
+      height: { ideal: settings.height, max: settings.height },
+      frameRate: { ideal: settings.frameRate, max: settings.frameRate }
+    });
+  } catch {
+  }
+}
+async function syncNativeVideoTrack() {
+  if (!mesh || !localPresentation) return;
+  if (currentStreamSettings.codec === NATIVE_VIDEO_CODEC_ID) {
+    await mesh.setVideoTrack(localPresentation.videoTrack ?? null, currentStreamSettings.bitrate);
+  } else {
+    await mesh.setVideoTrack(null);
+  }
 }
 async function startRoom() {
   const button = $("#share-button");
@@ -3515,6 +3744,7 @@ async function startRoom() {
       maxParticipants: selectedRoomLimit()
     });
     session.startHosting(signaling.roomId, signaling.participantId);
+    syncSignalingParticipants(signaling);
     history.replaceState({}, "", appPath(`room/${session.roomId}`));
     prepareRoomShell();
     setRoomConnectionState("waiting", "Opening room");
@@ -3544,15 +3774,47 @@ async function joinRoom2(id, password = "") {
   try {
     signaling = await joinRoom(appPath("api"), id, { password });
     session.setLocalPeer(signaling.participantId, signaling.hostId);
+    syncSignalingParticipants(signaling);
     startNativeMesh(signaling);
     for (const participant of signaling.participants) mesh?.connect(participant.id);
   } catch (error) {
-    if (error instanceof SignalingError && error.code === "password-required") {
-      const entered = window.prompt("Enter the password for this room:");
+    if (error instanceof SignalingError && ["password-required", "invalid-password"].includes(error.code)) {
+      const entered = await requestRoomPassword(id, error.code === "invalid-password");
       if (entered !== null) return joinRoom2(id, entered);
+      cancelPendingJoin(id);
+      return;
     }
     endViewer(errorMessage(error, "Could not connect to this room."));
   }
+}
+function requestRoomPassword(roomId, invalid) {
+  $("#join-password-room").textContent = roomId;
+  joinPasswordInput.value = "";
+  joinPasswordInput.type = "password";
+  $("#join-password-visibility").setAttribute("aria-pressed", "false");
+  $("#join-password-visibility").setAttribute("aria-label", "Show password");
+  const visibilityLabel = $("#join-password-visibility span");
+  visibilityLabel.textContent = "Show";
+  joinPasswordError.textContent = invalid ? "That password did not work. Try again." : "";
+  joinPasswordError.hidden = !invalid;
+  joinPasswordDialog.showModal();
+  queueMicrotask(() => joinPasswordInput.focus());
+  return new Promise((resolve) => {
+    resolvePasswordPrompt = resolve;
+  });
+}
+function finishPasswordPrompt(password) {
+  const resolve = resolvePasswordPrompt;
+  resolvePasswordPrompt = void 0;
+  if (joinPasswordDialog.open) joinPasswordDialog.close();
+  resolve?.(password);
+}
+function cancelPendingJoin(roomId) {
+  disposeConnections();
+  session.reset();
+  setScreen("landing");
+  $("#room-code").value = roomId;
+  history.replaceState({}, "", appPath());
 }
 function prepareRoomShell() {
   $("#room-code-display").textContent = session.roomId;
@@ -3566,7 +3828,7 @@ function startNativeMesh(roomSignaling) {
   mesh = new RtcMesh(roomSignaling.participantId, rtcConfig, (signal) => roomSignaling.send(signal), {
     peerAvailable: routePeer,
     peerClosed: handlePeerClosed,
-    audioTrack: receiveAudioTrack,
+    mediaTrack: receiveMediaTrack,
     error: (_, error) => showToast(error.message || "A peer connection failed.", "error")
   });
   roomSignaling.onSignal((signal) => mesh?.handleSignal(signal));
@@ -3598,8 +3860,9 @@ function acceptViewer(peerConnection) {
   if (hostConnections.has(viewerId)) {
     return;
   }
-  guestNumber += 1;
-  hostConnections.set(viewerId, { control: connection, name: `Guest ${guestNumber}`, lastMessageAt: 0 });
+  hostConnections.set(viewerId, { control: connection, name: guestIdentity(viewerId).name, lastMessageAt: 0 });
+  participantIds.add(viewerId);
+  renderParticipantPresence();
   const viewer = hostConnections.get(viewerId);
   if (!viewer) return;
   connection.send({ type: "accepted", name: viewer.name, hostId: session.hostId });
@@ -3667,9 +3930,13 @@ function handleRoomMessage(value) {
       updateRoomUI();
       break;
     case "participant-joined":
+      participantIds.add(message.peerId);
+      renderParticipantPresence();
       if (localPresentation) connectLocalStreamTo(message.peerId);
       break;
     case "participant-left":
+      participantIds.delete(message.peerId);
+      renderParticipantPresence();
       disconnectLocalStreamFrom(message.peerId);
       if (presenters.has(message.peerId)) removePresenter(message.peerId);
       mesh?.closePeer(message.peerId);
@@ -3682,7 +3949,7 @@ function handleViewerData(viewerId, value) {
   const viewer = hostConnections.get(viewerId);
   if (!viewer) return;
   if (message.type === "stream-started") {
-    const settings = message.streamSettings || qualityPresets.balanced;
+    const settings = message.streamSettings || qualityPresets["720p"];
     const presenter = {
       id: viewerId,
       name: viewer.name,
@@ -3755,7 +4022,7 @@ async function startRoomPresentation() {
 async function beginLocalPresentation(stream) {
   if (!signaling?.participantId || !mesh) throw new Error("The room connection is not ready.");
   try {
-    localPresentation = createTextPresentation(stream, currentStreamSettings);
+    localPresentation = createLocalPresentation(stream, currentStreamSettings);
   } catch (error) {
     stopMediaStream(stream);
     throw error;
@@ -3765,6 +4032,7 @@ async function beginLocalPresentation(stream) {
   attachLocalPreview(stream, presenter.id);
   await localPresentation.start();
   await mesh.setAudioTrack(localAudioTracks()[0] ?? null);
+  await syncNativeVideoTrack();
   if (session.isHost) {
     session.finishPresentation();
     broadcast({ type: "stream-started", presenter });
@@ -3790,8 +4058,8 @@ function localPresenterInfo() {
     settings: { ...currentStreamSettings }
   };
 }
-function connectLocalStreamToParticipants(participantIds) {
-  for (const participantId of participantIds) connectLocalStreamTo(participantId);
+function connectLocalStreamToParticipants(participantIds2) {
+  for (const participantId of participantIds2) connectLocalStreamTo(participantId);
   updateBandwidthEstimate();
 }
 function connectLocalStreamTo(participantId) {
@@ -3805,7 +4073,8 @@ function disconnectLocalStreamFrom(participantId) {
   updateBandwidthEstimate();
 }
 function attachIncomingTextStream(presenterId) {
-  if (presenterId === signaling?.participantId || incomingTextReceivers.has(presenterId) || !presenters.has(presenterId)) return;
+  const presenter = presenters.get(presenterId);
+  if (presenterId === signaling?.participantId || incomingTextReceivers.has(presenterId) || presenter?.settings.codec !== TEXT_CODEC_ID) return;
   const connection = peerChannels.get(presenterId)?.screen;
   const canvas = streamCardMedia(presenterId, "canvas");
   if (!connection || !canvas) return;
@@ -3815,7 +4084,16 @@ function attachIncomingTextStream(presenterId) {
     if (incomingTextReceivers.get(presenterId) === receiver) incomingTextReceivers.delete(presenterId);
   });
 }
-function receiveAudioTrack(peerId2, track, streams) {
+function receiveMediaTrack(peerId2, track, streams) {
+  if (track.kind === "video") {
+    const stream = streams[0] ?? new MediaStream([track]);
+    remoteVideoStreams.set(peerId2, stream);
+    attachIncomingNativeStream(peerId2);
+    track.addEventListener("ended", () => {
+      if (remoteVideoStreams.get(peerId2) === stream) remoteVideoStreams.delete(peerId2);
+    }, { once: true });
+    return;
+  }
   if (track.kind !== "audio" || peerId2 === signaling?.participantId) return;
   const audio = remoteAudioElements.get(peerId2) || document.createElement("audio");
   audio.autoplay = true;
@@ -3825,6 +4103,15 @@ function receiveAudioTrack(peerId2, track, streams) {
   const name = presenters.get(peerId2)?.name ?? "participant";
   void audio.play().catch(() => showToast(`Click ${name}\u2019s mute button to enable audio.`));
   track.addEventListener("ended", () => closeIncomingAudio(peerId2), { once: true });
+}
+function attachIncomingNativeStream(presenterId) {
+  const presenter = presenters.get(presenterId);
+  const stream = remoteVideoStreams.get(presenterId);
+  const video = streamCardMedia(presenterId, "video");
+  if (!stream || !video || presenter?.settings.codec !== NATIVE_VIDEO_CODEC_ID) return;
+  video.srcObject = stream;
+  void video.play().then(() => setCardConnected(presenterId)).catch(() => {
+  });
 }
 function closeIncomingAudio(presenterId) {
   const audio = remoteAudioElements.get(presenterId);
@@ -3836,6 +4123,7 @@ function stopLocalPresentation() {
   const presenterId = signaling?.participantId;
   disposeLocalPresentation();
   void mesh?.setAudioTrack(null);
+  void mesh?.setVideoTrack(null);
   session.finishPresentation();
   if (presenterId) removePresenter(presenterId);
   if (presenterId) {
@@ -3884,16 +4172,26 @@ function toggleLocalAudio() {
   showToast(enabled ? "Stream audio resumed." : "Stream audio stopped.");
 }
 function upsertPresenter(presenter) {
+  const previous = presenters.get(presenter.id);
+  if (previous && previous.settings.codec !== presenter.settings.codec) {
+    incomingTextReceivers.get(presenter.id)?.close();
+    incomingTextReceivers.delete(presenter.id);
+    streamGrid.querySelector(`[data-presenter-id="${CSS.escape(presenter.id)}"]`)?.remove();
+  }
   presenters.set(presenter.id, presenter);
+  renderParticipantPresence();
   renderStreamCard(presenter);
   attachIncomingTextStream(presenter.id);
+  attachIncomingNativeStream(presenter.id);
   updateStreamGrid();
 }
 function removePresenter(presenterId) {
   presenters.delete(presenterId);
+  renderParticipantPresence();
   incomingTextReceivers.get(presenterId)?.close();
   incomingTextReceivers.delete(presenterId);
   closeIncomingAudio(presenterId);
+  remoteVideoStreams.delete(presenterId);
   mutedPresenters.delete(presenterId);
   streamGrid.querySelector(`[data-presenter-id="${CSS.escape(presenterId)}"]`)?.remove();
   updateStreamGrid();
@@ -3907,11 +4205,11 @@ function renderStreamCard(presenter) {
     card.dataset.presenterId = presenter.id;
     const media = document.createElement("div");
     media.className = "stream-card-media";
-    const visual = document.createElement(isLocal ? "video" : "canvas");
+    const visual = document.createElement(isLocal || presenter.settings.codec === NATIVE_VIDEO_CODEC_ID ? "video" : "canvas");
     visual.setAttribute("playsinline", "");
     if (visual instanceof HTMLVideoElement) {
       visual.autoplay = true;
-      visual.muted = true;
+      visual.muted = isLocal;
     }
     const loading = document.createElement("div");
     loading.className = "stream-connecting";
@@ -4014,6 +4312,44 @@ function updateParticipantCount(count) {
   });
   updateBandwidthEstimate();
 }
+function syncSignalingParticipants(roomSignaling) {
+  participantIds.clear();
+  participantIds.add(roomSignaling.hostId);
+  participantIds.add(roomSignaling.participantId);
+  for (const participant of roomSignaling.participants) participantIds.add(participant.id);
+  renderParticipantPresence();
+}
+function renderParticipantPresence() {
+  const container = document.querySelector("#participant-avatars");
+  if (!container) return;
+  container.replaceChildren();
+  const localId = signaling?.participantId;
+  const visible = [...participantIds].slice(0, 5);
+  for (const participantId of visible) {
+    const isHost = participantId === (signaling?.hostId || session.hostId);
+    const isLocal = participantId === localId;
+    const isSharing = presenters.has(participantId);
+    const identity = isHost ? { name: "Host", emoji: "\u{1F451}", color: 0 } : guestIdentity(participantId);
+    const label = `${identity.name}${isHost ? " \xB7 Host" : ""}${isLocal ? " \xB7 You" : ""}${isSharing ? " \xB7 Sharing" : ""}`;
+    const avatar = document.createElement("span");
+    avatar.className = `participant-avatar color-${identity.color}${isHost ? " host" : ""}${isSharing ? " sharing" : ""}`;
+    avatar.textContent = identity.emoji;
+    avatar.tabIndex = 0;
+    avatar.dataset.tooltip = label;
+    avatar.setAttribute("aria-label", label);
+    container.append(avatar);
+  }
+  const hidden = participantIds.size - visible.length;
+  if (hidden > 0) {
+    const overflow = document.createElement("span");
+    overflow.className = "participant-avatar participant-overflow";
+    overflow.textContent = `+${hidden}`;
+    overflow.tabIndex = 0;
+    overflow.dataset.tooltip = `${hidden} more ${hidden === 1 ? "participant" : "participants"}`;
+    overflow.setAttribute("aria-label", overflow.dataset.tooltip);
+    container.append(overflow);
+  }
+}
 function broadcastParticipantCount() {
   updateParticipantCount(hostConnections.size + 1);
   broadcast({ type: "participant-count", participantCount: hostConnections.size + 1 });
@@ -4022,6 +4358,8 @@ function removeViewer(viewerId, expectedConnection) {
   const viewer = hostConnections.get(viewerId);
   if (!viewer || expectedConnection && viewer.control !== expectedConnection) return;
   hostConnections.delete(viewerId);
+  participantIds.delete(viewerId);
+  renderParticipantPresence();
   peerChannels.delete(viewerId);
   viewer.control.close();
   if (mesh?.peer(viewerId)) mesh.closePeer(viewerId);
@@ -4039,6 +4377,7 @@ function handlePeerClosed(peerId2) {
   peerChannels.delete(peerId2);
   incomingTextReceivers.get(peerId2)?.close();
   incomingTextReceivers.delete(peerId2);
+  remoteVideoStreams.delete(peerId2);
   closeIncomingAudio(peerId2);
   if (session.isHost) removeViewer(peerId2);
   else if (peerId2 === session.hostId) endViewer("The room is no longer available.");
@@ -4047,22 +4386,29 @@ function handlePeerClosed(peerId2) {
     if (presenters.has(peerId2)) removePresenter(peerId2);
   }
 }
-async function setQuality(name) {
-  const settings = qualityPresets[name];
-  currentQuality = name;
+async function setQuality(name, customSettings) {
+  const settings = name === "custom" ? customSettings : qualityPresets[name];
+  if (!settings) return;
+  const previousCodec = currentStreamSettings.codec;
   currentStreamSettings = { ...settings };
-  localPresentation?.updateSettings(currentStreamSettings);
-  const videoTrack = localPresentation?.videoTrack;
-  if (videoTrack) {
-    try {
-      await videoTrack.applyConstraints({ frameRate: { ideal: settings.frameRate, max: Math.max(12, settings.frameRate) } });
-    } catch {
-    }
+  if (localPresentation && previousCodec !== settings.codec) {
+    const stream = localPresentation.stream;
+    localPresentation.stop(false);
+    localPresentation = createLocalPresentation(stream, currentStreamSettings);
+    await localPresentation.start();
+    connectLocalStreamToParticipants(session.isHost ? [...hostConnections.keys()] : [...peerChannels.keys()]);
+  } else {
+    localPresentation?.updateSettings(currentStreamSettings);
   }
+  await syncNativeVideoTrack();
   $("#quality-label").textContent = settings.buttonLabel;
   document.querySelectorAll("[data-quality]").forEach((button) => {
     button.classList.toggle("active", button.dataset.quality === name);
   });
+  $("#custom-quality-panel").hidden = name !== "custom";
+  document.querySelector('[data-quality="custom"]')?.setAttribute("aria-expanded", String(name === "custom"));
+  updatePipelineSummary();
+  updateBandwidthEstimate();
   if (localPresentation) {
     const presenter = localPresenterInfo();
     upsertPresenter(presenter);
@@ -4082,13 +4428,49 @@ async function setQuality(name) {
   closeQualityMenu();
   showToast(`${settings.buttonLabel}: ${settings.label}.`);
 }
+function openCustomQuality() {
+  document.querySelectorAll("[data-quality]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.quality === "custom");
+  });
+  $("#custom-quality-panel").hidden = false;
+  document.querySelector('[data-quality="custom"]')?.setAttribute("aria-expanded", "true");
+}
+function customVideoSettings() {
+  const [width, height] = ($("#custom-resolution").value || "1920x1080").split("x").map(Number);
+  const frameRate = Number($("#custom-frame-rate").value) || 30;
+  const compression = $("#custom-compression").value;
+  const pixelsPerSecond = width * height * frameRate;
+  const bitsPerPixel = compression === "high" ? 0.045 : compression === "low" ? 0.1 : 0.07;
+  const bitrate = Math.max(5e5, Math.round(pixelsPerSecond * bitsPerPixel / 1e5) * 1e5);
+  const resolutionLabel = height === 2160 ? "4K" : `${height}p`;
+  return {
+    codec: NATIVE_VIDEO_CODEC_ID,
+    width,
+    height,
+    frameRate,
+    bitrate,
+    compression,
+    label: `${resolutionLabel} \xB7 ${frameRate} fps \xB7 ${compression} compression`,
+    buttonLabel: "Custom"
+  };
+}
+function updatePipelineSummary() {
+  const summary = $("#pipeline-summary");
+  const title = summary.querySelector("span");
+  const badge = summary.querySelector("b");
+  const description = summary.querySelector("p");
+  const text = currentStreamSettings.codec === TEXT_CODEC_ID;
+  if (title) title.textContent = text ? "Pixel-exact tile deltas" : "Browser video encoder";
+  if (badge) badge.textContent = text ? "DEFLATE" : "WebRTC";
+  if (description) description.textContent = text ? "Only changed 128 px tiles are sent through the custom lossless text pipeline." : "Resolution, frame rate, and bitrate are handled by the browser\u2019s native WebRTC media pipeline.";
+}
 function updateBandwidthEstimate() {
   const audience = localPresentation ? Math.max(0, session.participantCount - 1) : 0;
-  const lastFrameEstimate = currentStreamSettings.frameRate * 0.35;
-  const estimated = lastFrameEstimate * audience;
+  const perPeer = currentStreamSettings.codec === NATIVE_VIDEO_CODEC_ID ? currentStreamSettings.bitrate / 1e6 : currentStreamSettings.frameRate * 0.35;
+  const estimated = perPeer * audience;
   $("#bandwidth-total").textContent = `\u2248${formatMbps(estimated)} Mbps`;
-  $("#bandwidth-detail").textContent = `Content-dependent lossless deltas \xD7 ${audience} ${audience === 1 ? "peer" : "peers"}`;
-  $("#bandwidth-capacity").textContent = `Text mode is lossless; motion can use substantially more bandwidth.`;
+  $("#bandwidth-detail").textContent = `${currentStreamSettings.codec === TEXT_CODEC_ID ? "Content-dependent lossless deltas" : `Up to ${formatMbps(perPeer)} Mbps`} \xD7 ${audience} ${audience === 1 ? "peer" : "peers"}`;
+  $("#bandwidth-capacity").textContent = currentStreamSettings.codec === TEXT_CODEC_ID ? "Text mode prioritizes pixel-perfect detail over motion." : "Native WebRTC adapts below this limit when the connection needs it.";
 }
 function formatMbps(value) {
   return value.toFixed(1).replace(/\.0$/, "");
@@ -4309,8 +4691,14 @@ function disposeConnections() {
   mesh?.close();
   mesh = void 0;
   peerChannels.clear();
+  participantIds.clear();
+  renderParticipantPresence();
   for (const receiver of incomingTextReceivers.values()) receiver.close();
   incomingTextReceivers.clear();
+  for (const stream of remoteVideoStreams.values()) {
+    for (const track of stream.getTracks()) track.stop();
+  }
+  remoteVideoStreams.clear();
   for (const audio of remoteAudioElements.values()) audio.srcObject = null;
   remoteAudioElements.clear();
 }
@@ -4387,9 +4775,11 @@ document.querySelectorAll("[data-quality-trigger]").forEach((button) => {
 document.querySelectorAll("[data-quality]").forEach((button) => {
   button.addEventListener("click", () => {
     const quality = button.dataset.quality;
-    if (quality && quality in qualityPresets) void setQuality(quality);
+    if (quality === "custom") openCustomQuality();
+    else if (quality && quality in qualityPresets) void setQuality(quality);
   });
 });
+$("#apply-custom-quality").addEventListener("click", () => void setQuality("custom", customVideoSettings()));
 document.addEventListener("click", (event) => {
   const target = event.target instanceof Element ? event.target : null;
   if (!target?.closest("[data-quality-trigger]") && !target?.closest("#quality-menu")) closeQualityMenu();
@@ -4399,7 +4789,36 @@ $("#join-form").addEventListener("submit", (event) => {
   const id = normalizeRoomCode($("#room-code").value);
   if (!id) return showToast("Enter a valid room code.", "error");
   history.replaceState({}, "", appPath(`room/${id}`));
-  void joinRoom2(id, optionalInputValue("#join-password"));
+  void joinRoom2(id);
+});
+$("#join-password-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const password = joinPasswordInput.value;
+  if (!password) {
+    joinPasswordError.textContent = "Enter the room password to continue.";
+    joinPasswordError.hidden = false;
+    joinPasswordInput.focus();
+    return;
+  }
+  finishPasswordPrompt(password);
+});
+$(".password-dialog-close").addEventListener("click", () => finishPasswordPrompt(null));
+$(".password-cancel").addEventListener("click", () => finishPasswordPrompt(null));
+joinPasswordDialog.addEventListener("cancel", (event) => {
+  event.preventDefault();
+  finishPasswordPrompt(null);
+});
+joinPasswordInput.addEventListener("input", () => {
+  joinPasswordError.hidden = true;
+});
+$("#join-password-visibility").addEventListener("click", () => {
+  const button = $("#join-password-visibility");
+  const visible = joinPasswordInput.type === "text";
+  joinPasswordInput.type = visible ? "password" : "text";
+  button.setAttribute("aria-pressed", String(!visible));
+  button.setAttribute("aria-label", visible ? "Show password" : "Hide password");
+  $("#join-password-visibility span").textContent = visible ? "Show" : "Hide";
+  joinPasswordInput.focus();
 });
 var relativePath = location.pathname.startsWith(appBasePath) ? location.pathname.slice(appBasePath.length) || "/" : location.pathname;
 var routeMatch = relativePath.match(/^\/room\/([a-z0-9-]{6,32})\/?$/i);

@@ -1,4 +1,9 @@
-import { TEXT_CODEC_ID, type TextCodecSettings } from '../../media/index.js';
+import {
+  NATIVE_VIDEO_CODEC_ID,
+  TEXT_CODEC_ID,
+  type NativeVideoSettings,
+  type TextCodecSettings,
+} from '../../media/index.js';
 import type {
   ActivityKind,
   ChatActivity,
@@ -73,14 +78,14 @@ export function parseViewerRoomMessage(value: unknown): ViewerRoomMessage | unde
     case 'stream-started':
       return {
         type: 'stream-started',
-        streamSettings: parseTextSettings(message.streamSettings),
+        streamSettings: parseStreamSettings(message.streamSettings),
         audioEnabled: message.audioEnabled === true,
       };
     case 'stop-presenting':
       return { type: 'stop-presenting' };
     case 'settings-changed':
     case 'settings-selected': {
-      const streamSettings = parseTextSettings(message.streamSettings);
+      const streamSettings = parseStreamSettings(message.streamSettings);
       return streamSettings ? { type: message.type, streamSettings } : undefined;
     }
     case 'audio-changed':
@@ -101,7 +106,7 @@ export function parsePresenter(value: unknown, hostId: string): PresenterInfo | 
   if (!presenter) return undefined;
   const id = peerId(presenter.id);
   const name = boundedString(presenter.name, 40);
-  const settings = parseTextSettings(presenter.settings);
+  const settings = parseStreamSettings(presenter.settings);
   if (!id || !name || typeof presenter.audioEnabled !== 'boolean' || !settings) return undefined;
   return { id, name, isHost: id === hostId, audioEnabled: presenter.audioEnabled, settings };
 }
@@ -119,6 +124,30 @@ export function parseTextSettings(value: unknown): TextCodecSettings | undefined
     frameRate: settings.frameRate,
     compressionLevel: settings.compressionLevel,
     tileSize: settings.tileSize,
+    label,
+    buttonLabel,
+  } : undefined;
+}
+
+export function parseStreamSettings(value: unknown): TextCodecSettings | NativeVideoSettings | undefined {
+  const text = parseTextSettings(value);
+  if (text) return text;
+  const settings = record(value);
+  if (!settings || settings.codec !== NATIVE_VIDEO_CODEC_ID
+    || !validInteger(settings.frameRate, 1, 60)
+    || !validInteger(settings.width, 320, 3840)
+    || !validInteger(settings.height, 180, 2160)
+    || !validInteger(settings.bitrate, 100_000, 50_000_000)
+    || !['high', 'balanced', 'low'].includes(String(settings.compression))) return undefined;
+  const label = boundedString(settings.label, 80);
+  const buttonLabel = boundedString(settings.buttonLabel, 40);
+  return label && buttonLabel ? {
+    codec: NATIVE_VIDEO_CODEC_ID,
+    frameRate: settings.frameRate,
+    width: settings.width,
+    height: settings.height,
+    bitrate: settings.bitrate,
+    compression: settings.compression as NativeVideoSettings['compression'],
     label,
     buttonLabel,
   } : undefined;

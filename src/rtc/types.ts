@@ -25,6 +25,6 @@ export type RtcSignal =
 export interface RtcMeshEvents {
   peerAvailable(peer: RtcPeerChannels): void;
   peerClosed(peerId: string): void;
-  audioTrack(peerId: string, track: MediaStreamTrack, streams: readonly MediaStream[]): void;
+  mediaTrack(peerId: string, track: MediaStreamTrack, streams: readonly MediaStream[]): void;
   error(peerId: string, error: Error): void;
 }

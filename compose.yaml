@@ -1,0 +1,19 @@
+services:
+  database:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: mise
+      POSTGRES_USER: mise
+      POSTGRES_PASSWORD: mise
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mise -d mise"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    ports:
+      - "127.0.0.1:54329:5432"
+    volumes:
+      - mise-postgres:/var/lib/postgresql/data
+
+volumes:
+  mise-postgres:

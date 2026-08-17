@@ -1,19 +1,21 @@
 import {
   createTextPresentation,
+  NATIVE_VIDEO_CODEC_ID,
   TEXT_CODEC_ID,
   TextStreamReceiver,
-  type TextCodecSettings,
-  type TextPresentation,
+  type NativeVideoSettings,
 } from './media/index.js';
 import {
   parseHostRoomMessage,
   parseViewerRoomMessage,
+  guestIdentity,
   RoomSession,
   type ActivityKind,
   type ChatActivity,
   type ChatEntry,
   type ChatMessage,
   type PresenterInfo,
+  type RoomStreamSettings,
 } from './room/index.js';
 import { RtcMesh, type RtcChannel, type RtcPeerChannels } from './rtc/index.js';
 import { createRoom, joinRoom as joinSignalingRoom, RestSignalingSession, SignalingError } from './signaling/index.js';
@@ -24,7 +26,21 @@ type AppElement = HTMLElement & {
   value: string;
 };
 type ToastTone = 'default' | 'error';
-type QualityName = keyof typeof qualityPresets;
+type PresetName = keyof typeof qualityPresets;
+type QualityName = PresetName | 'custom';
+
+interface LocalPresentation {
+  readonly stream: MediaStream;
+  readonly videoTrack: MediaStreamTrack | undefined;
+  readonly codec: RoomStreamSettings['codec'];
+  start(): Promise<void>;
+  updateSettings(settings: RoomStreamSettings): void;
+  connect(participantId: string, channel: RtcChannel): void;
+  disconnect(participantId: string): void;
+  audioTracks(): MediaStreamTrack[];
+  setAudioEnabled(enabled: boolean): void;
+  stop(stopTracks?: boolean): void;
+}
 
 interface ViewerEntry {
   control: RtcChannel;
@@ -51,42 +67,64 @@ const appBaseUrl = new URL(document.baseURI);
 const appBasePath = appBaseUrl.pathname.replace(/\/$/, '');
 
 const qualityPresets = {
-  efficient: {
-    codec: TEXT_CODEC_ID,
-    frameRate: 4,
-    compressionLevel: 8,
-    tileSize: 128,
-    label: 'Native pixels · 4 fps · DEFLATE 8',
-    buttonLabel: 'Text efficient',
-  },
-  balanced: {
+  text: {
     codec: TEXT_CODEC_ID,
     frameRate: 6,
     compressionLevel: 6,
     tileSize: 128,
-    label: 'Native pixels · 6 fps · DEFLATE 6',
-    buttonLabel: 'Lossless text',
+    label: 'Native resolution · 6 fps · lossless',
+    buttonLabel: 'Text',
   },
-  responsive: {
-    codec: TEXT_CODEC_ID,
-    frameRate: 10,
-    compressionLevel: 4,
-    tileSize: 128,
-    label: 'Native pixels · 10 fps · DEFLATE 4',
-    buttonLabel: 'Text responsive',
+  '720p': {
+    codec: NATIVE_VIDEO_CODEC_ID,
+    frameRate: 30,
+    width: 1280,
+    height: 720,
+    bitrate: 2_500_000,
+    compression: 'balanced',
+    label: '720p · 30 fps · balanced compression',
+    buttonLabel: '720p',
   },
-} satisfies Record<string, TextCodecSettings>;
+  '720p60': {
+    codec: NATIVE_VIDEO_CODEC_ID,
+    frameRate: 60,
+    width: 1280,
+    height: 720,
+    bitrate: 4_000_000,
+    compression: 'balanced',
+    label: '720p · 60 fps · balanced compression',
+    buttonLabel: '720p 60 FPS',
+  },
+  '1080p': {
+    codec: NATIVE_VIDEO_CODEC_ID,
+    frameRate: 30,
+    width: 1920,
+    height: 1080,
+    bitrate: 5_000_000,
+    compression: 'balanced',
+    label: '1080p · 30 fps · balanced compression',
+    buttonLabel: '1080p',
+  },
+  '1080p60': {
+    codec: NATIVE_VIDEO_CODEC_ID,
+    frameRate: 60,
+    width: 1920,
+    height: 1080,
+    bitrate: 8_000_000,
+    compression: 'balanced',
+    label: '1080p · 60 fps · balanced compression',
+    buttonLabel: '1080p 60 FPS',
+  },
+} satisfies Record<string, RoomStreamSettings>;
 
 let mesh: RtcMesh | undefined;
 let signaling: RestSignalingSession | undefined;
 const session = new RoomSession();
 let viewerControl: RtcChannel | undefined;
-let localPresentation: TextPresentation | undefined;
+let localPresentation: LocalPresentation | undefined;
 let shareAudioEnabled = false;
 let maxParticipants = 12;
-let guestNumber = 0;
-let currentQuality: QualityName = 'balanced';
-let currentStreamSettings: TextCodecSettings = { ...qualityPresets.balanced };
+let currentStreamSettings: RoomStreamSettings = { ...qualityPresets['720p'] };
 let rtcConfig: RTCConfiguration = {
   iceServers: [{ urls: ['stun:main.lohr.dev:3478', 'stun:stun.l.google.com:19302'] }],
 };
@@ -99,8 +137,10 @@ const hostConnections = new Map<string, ViewerEntry>();
 const presenters = new Map<string, PresenterInfo>();
 const peerChannels = new Map<string, RtcPeerChannels>();
 const incomingTextReceivers = new Map<string, TextStreamReceiver>();
+const remoteVideoStreams = new Map<string, MediaStream>();
 const remoteAudioElements = new Map<string, HTMLAudioElement>();
 const mutedPresenters = new Set<string>();
+const participantIds = new Set<string>();
 const chatHistory: ChatEntry[] = [];
 
 const configReady = fetch(appPath('config'))
@@ -143,17 +183,85 @@ function normalizeRoomCode(value: string): string {
 
 async function captureDisplay() {
   if (!navigator.mediaDevices?.getDisplayMedia) throw new Error('Screen sharing is not supported in this browser.');
+  const video = currentStreamSettings.codec === NATIVE_VIDEO_CODEC_ID
+    ? {
+        width: { ideal: currentStreamSettings.width, max: currentStreamSettings.width },
+        height: { ideal: currentStreamSettings.height, max: currentStreamSettings.height },
+        frameRate: { ideal: currentStreamSettings.frameRate, max: currentStreamSettings.frameRate },
+      }
+    : { frameRate: { ideal: currentStreamSettings.frameRate, max: 12 } };
   const stream = await navigator.mediaDevices.getDisplayMedia({
-    video: { frameRate: { ideal: currentStreamSettings.frameRate, max: Math.max(12, currentStreamSettings.frameRate) } },
+    video,
     audio: shareAudioEnabled,
   });
   const videoTrack = stream.getVideoTracks()[0];
-  videoTrack.contentHint = 'detail';
+  videoTrack.contentHint = currentStreamSettings.codec === TEXT_CODEC_ID || currentStreamSettings.frameRate < 60 ? 'detail' : 'motion';
   videoTrack.onended = () => stopLocalPresentation();
   if (shareAudioEnabled && stream.getAudioTracks().length === 0) {
     showToast('Audio was not available for the selected screen.', 'error');
   }
   return stream;
+}
+
+function createLocalPresentation(stream: MediaStream, settings: RoomStreamSettings): LocalPresentation {
+  if (settings.codec === TEXT_CODEC_ID) {
+    const videoTrack = stream.getVideoTracks()[0];
+    if (videoTrack) videoTrack.contentHint = 'detail';
+    const text = createTextPresentation(stream, settings);
+    return {
+      stream,
+      videoTrack: text.videoTrack,
+      codec: TEXT_CODEC_ID,
+      start: () => text.start(),
+      updateSettings: (next) => { if (next.codec === TEXT_CODEC_ID) text.updateSettings(next); },
+      connect: (participantId, channel) => text.connect(participantId, channel),
+      disconnect: (participantId) => text.disconnect(participantId),
+      audioTracks: () => text.audioTracks(),
+      setAudioEnabled: (enabled) => text.setAudioEnabled(enabled),
+      stop: (stopTracks) => text.stop(stopTracks),
+    };
+  }
+  let stopped = false;
+  return {
+    stream,
+    videoTrack: stream.getVideoTracks()[0],
+    codec: NATIVE_VIDEO_CODEC_ID,
+    start: async () => applyVideoConstraints(stream.getVideoTracks()[0], settings),
+    updateSettings: (next) => {
+      if (!stopped && next.codec === NATIVE_VIDEO_CODEC_ID) void applyVideoConstraints(stream.getVideoTracks()[0], next);
+    },
+    connect: () => {},
+    disconnect: () => {},
+    audioTracks: () => stream.getAudioTracks().filter((track) => track.readyState === 'live'),
+    setAudioEnabled: (enabled) => {
+      for (const track of stream.getAudioTracks()) track.enabled = enabled;
+    },
+    stop: (stopTracks = true) => {
+      stopped = true;
+      if (stopTracks) stopMediaStream(stream);
+    },
+  };
+}
+
+async function applyVideoConstraints(track: MediaStreamTrack | undefined, settings: NativeVideoSettings) {
+  if (!track) return;
+  track.contentHint = settings.frameRate >= 60 ? 'motion' : 'detail';
+  try {
+    await track.applyConstraints({
+      width: { ideal: settings.width, max: settings.width },
+      height: { ideal: settings.height, max: settings.height },
+      frameRate: { ideal: settings.frameRate, max: settings.frameRate },
+    });
+  } catch {}
+}
+
+async function syncNativeVideoTrack() {
+  if (!mesh || !localPresentation) return;
+  if (currentStreamSettings.codec === NATIVE_VIDEO_CODEC_ID) {
+    await mesh.setVideoTrack(localPresentation.videoTrack ?? null, currentStreamSettings.bitrate);
+  } else {
+    await mesh.setVideoTrack(null);
+  }
 }
 
 async function startRoom() {
@@ -167,6 +275,7 @@ async function startRoom() {
       maxParticipants: selectedRoomLimit(),
     });
     session.startHosting(signaling.roomId, signaling.participantId);
+    syncSignalingParticipants(signaling);
     history.replaceState({}, '', appPath(`room/${session.roomId}`));
     prepareRoomShell();
     setRoomConnectionState('waiting', 'Opening room');
@@ -198,6 +307,7 @@ async function joinRoom(id: string, password = '') {
   try {
     signaling = await joinSignalingRoom(appPath('api'), id, { password });
     session.setLocalPeer(signaling.participantId, signaling.hostId);
+    syncSignalingParticipants(signaling);
     startNativeMesh(signaling);
     for (const participant of signaling.participants) mesh?.connect(participant.id);
   } catch (error: unknown) {
@@ -254,7 +364,7 @@ function startNativeMesh(roomSignaling: RestSignalingSession) {
   mesh = new RtcMesh(roomSignaling.participantId, rtcConfig, (signal) => roomSignaling.send(signal), {
     peerAvailable: routePeer,
     peerClosed: handlePeerClosed,
-    audioTrack: receiveAudioTrack,
+    mediaTrack: receiveMediaTrack,
     error: (_, error) => showToast(error.message || 'A peer connection failed.', 'error'),
   });
   roomSignaling.onSignal((signal) => mesh?.handleSignal(signal));
@@ -288,8 +398,9 @@ function acceptViewer(peerConnection: RtcPeerChannels) {
   if (hostConnections.has(viewerId)) {
     return;
   }
-  guestNumber += 1;
-  hostConnections.set(viewerId, { control: connection, name: `Guest ${guestNumber}`, lastMessageAt: 0 });
+  hostConnections.set(viewerId, { control: connection, name: guestIdentity(viewerId).name, lastMessageAt: 0 });
+  participantIds.add(viewerId);
+  renderParticipantPresence();
   const viewer = hostConnections.get(viewerId);
   if (!viewer) return;
   connection.send({ type: 'accepted', name: viewer.name, hostId: session.hostId });
@@ -358,9 +469,13 @@ function handleRoomMessage(value: unknown) {
       updateRoomUI();
       break;
     case 'participant-joined':
+      participantIds.add(message.peerId);
+      renderParticipantPresence();
       if (localPresentation) connectLocalStreamTo(message.peerId);
       break;
     case 'participant-left':
+      participantIds.delete(message.peerId);
+      renderParticipantPresence();
       disconnectLocalStreamFrom(message.peerId);
       if (presenters.has(message.peerId)) removePresenter(message.peerId);
       mesh?.closePeer(message.peerId);
@@ -375,7 +490,7 @@ function handleViewerData(viewerId: string, value: unknown) {
   if (!viewer) return;
 
   if (message.type === 'stream-started') {
-    const settings = message.streamSettings || qualityPresets.balanced;
+    const settings = message.streamSettings || qualityPresets['720p'];
     const presenter: PresenterInfo = {
       id: viewerId,
       name: viewer.name,
@@ -450,7 +565,7 @@ async function startRoomPresentation() {
 async function beginLocalPresentation(stream: MediaStream) {
   if (!signaling?.participantId || !mesh) throw new Error('The room connection is not ready.');
   try {
-    localPresentation = createTextPresentation(stream, currentStreamSettings);
+    localPresentation = createLocalPresentation(stream, currentStreamSettings);
   } catch (error) {
     stopMediaStream(stream);
     throw error;
@@ -460,6 +575,7 @@ async function beginLocalPresentation(stream: MediaStream) {
   attachLocalPreview(stream, presenter.id);
   await localPresentation.start();
   await mesh.setAudioTrack(localAudioTracks()[0] ?? null);
+  await syncNativeVideoTrack();
 
   if (session.isHost) {
     session.finishPresentation();
@@ -506,7 +622,9 @@ function disconnectLocalStreamFrom(participantId: string) {
 }
 
 function attachIncomingTextStream(presenterId: string) {
-  if (presenterId === signaling?.participantId || incomingTextReceivers.has(presenterId) || !presenters.has(presenterId)) return;
+  const presenter = presenters.get(presenterId);
+  if (presenterId === signaling?.participantId || incomingTextReceivers.has(presenterId)
+    || presenter?.settings.codec !== TEXT_CODEC_ID) return;
   const connection = peerChannels.get(presenterId)?.screen;
   const canvas = streamCardMedia<HTMLCanvasElement>(presenterId, 'canvas');
   if (!connection || !canvas) return;
@@ -517,7 +635,16 @@ function attachIncomingTextStream(presenterId: string) {
   });
 }
 
-function receiveAudioTrack(peerId: string, track: MediaStreamTrack, streams: readonly MediaStream[]) {
+function receiveMediaTrack(peerId: string, track: MediaStreamTrack, streams: readonly MediaStream[]) {
+  if (track.kind === 'video') {
+    const stream = streams[0] ?? new MediaStream([track]);
+    remoteVideoStreams.set(peerId, stream);
+    attachIncomingNativeStream(peerId);
+    track.addEventListener('ended', () => {
+      if (remoteVideoStreams.get(peerId) === stream) remoteVideoStreams.delete(peerId);
+    }, { once: true });
+    return;
+  }
   if (track.kind !== 'audio' || peerId === signaling?.participantId) return;
   const audio = remoteAudioElements.get(peerId) || document.createElement('audio');
   audio.autoplay = true;
@@ -527,6 +654,15 @@ function receiveAudioTrack(peerId: string, track: MediaStreamTrack, streams: rea
   const name = presenters.get(peerId)?.name ?? 'participant';
   void audio.play().catch(() => showToast(`Click ${name}’s mute button to enable audio.`));
   track.addEventListener('ended', () => closeIncomingAudio(peerId), { once: true });
+}
+
+function attachIncomingNativeStream(presenterId: string) {
+  const presenter = presenters.get(presenterId);
+  const stream = remoteVideoStreams.get(presenterId);
+  const video = streamCardMedia<HTMLVideoElement>(presenterId, 'video');
+  if (!stream || !video || presenter?.settings.codec !== NATIVE_VIDEO_CODEC_ID) return;
+  video.srcObject = stream;
+  void video.play().then(() => setCardConnected(presenterId)).catch(() => {});
 }
 
 function closeIncomingAudio(presenterId: string) {
@@ -540,6 +676,7 @@ function stopLocalPresentation() {
   const presenterId = signaling?.participantId;
   disposeLocalPresentation();
   void mesh?.setAudioTrack(null);
+  void mesh?.setVideoTrack(null);
   session.finishPresentation();
   if (presenterId) removePresenter(presenterId);
 
@@ -594,17 +731,27 @@ function toggleLocalAudio() {
 }
 
 function upsertPresenter(presenter: PresenterInfo) {
+  const previous = presenters.get(presenter.id);
+  if (previous && previous.settings.codec !== presenter.settings.codec) {
+    incomingTextReceivers.get(presenter.id)?.close();
+    incomingTextReceivers.delete(presenter.id);
+    streamGrid.querySelector(`[data-presenter-id="${CSS.escape(presenter.id)}"]`)?.remove();
+  }
   presenters.set(presenter.id, presenter);
+  renderParticipantPresence();
   renderStreamCard(presenter);
   attachIncomingTextStream(presenter.id);
+  attachIncomingNativeStream(presenter.id);
   updateStreamGrid();
 }
 
 function removePresenter(presenterId: string) {
   presenters.delete(presenterId);
+  renderParticipantPresence();
   incomingTextReceivers.get(presenterId)?.close();
   incomingTextReceivers.delete(presenterId);
   closeIncomingAudio(presenterId);
+  remoteVideoStreams.delete(presenterId);
   mutedPresenters.delete(presenterId);
   streamGrid.querySelector(`[data-presenter-id="${CSS.escape(presenterId)}"]`)?.remove();
   updateStreamGrid();
@@ -619,11 +766,11 @@ function renderStreamCard(presenter: PresenterInfo) {
     card.dataset.presenterId = presenter.id;
     const media = document.createElement('div');
     media.className = 'stream-card-media';
-    const visual = document.createElement(isLocal ? 'video' : 'canvas');
+    const visual = document.createElement(isLocal || presenter.settings.codec === NATIVE_VIDEO_CODEC_ID ? 'video' : 'canvas');
     visual.setAttribute('playsinline', '');
     if (visual instanceof HTMLVideoElement) {
       visual.autoplay = true;
-      visual.muted = true;
+      visual.muted = isLocal;
     }
     const loading = document.createElement('div');
     loading.className = 'stream-connecting';
@@ -735,6 +882,48 @@ function updateParticipantCount(count: number) {
   updateBandwidthEstimate();
 }
 
+function syncSignalingParticipants(roomSignaling: RestSignalingSession) {
+  participantIds.clear();
+  participantIds.add(roomSignaling.hostId);
+  participantIds.add(roomSignaling.participantId);
+  for (const participant of roomSignaling.participants) participantIds.add(participant.id);
+  renderParticipantPresence();
+}
+
+function renderParticipantPresence() {
+  const container = document.querySelector<HTMLElement>('#participant-avatars');
+  if (!container) return;
+  container.replaceChildren();
+  const localId = signaling?.participantId;
+  const visible = [...participantIds].slice(0, 5);
+  for (const participantId of visible) {
+    const isHost = participantId === (signaling?.hostId || session.hostId);
+    const isLocal = participantId === localId;
+    const isSharing = presenters.has(participantId);
+    const identity = isHost
+      ? { name: 'Host', emoji: '👑', color: 0 }
+      : guestIdentity(participantId);
+    const label = `${identity.name}${isHost ? ' · Host' : ''}${isLocal ? ' · You' : ''}${isSharing ? ' · Sharing' : ''}`;
+    const avatar = document.createElement('span');
+    avatar.className = `participant-avatar color-${identity.color}${isHost ? ' host' : ''}${isSharing ? ' sharing' : ''}`;
+    avatar.textContent = identity.emoji;
+    avatar.tabIndex = 0;
+    avatar.dataset.tooltip = label;
+    avatar.setAttribute('aria-label', label);
+    container.append(avatar);
+  }
+  const hidden = participantIds.size - visible.length;
+  if (hidden > 0) {
+    const overflow = document.createElement('span');
+    overflow.className = 'participant-avatar participant-overflow';
+    overflow.textContent = `+${hidden}`;
+    overflow.tabIndex = 0;
+    overflow.dataset.tooltip = `${hidden} more ${hidden === 1 ? 'participant' : 'participants'}`;
+    overflow.setAttribute('aria-label', overflow.dataset.tooltip);
+    container.append(overflow);
+  }
+}
+
 function broadcastParticipantCount() {
   updateParticipantCount(hostConnections.size + 1);
   broadcast({ type: 'participant-count', participantCount: hostConnections.size + 1 });
@@ -744,6 +933,8 @@ function removeViewer(viewerId: string, expectedConnection?: RtcChannel) {
   const viewer = hostConnections.get(viewerId);
   if (!viewer || (expectedConnection && viewer.control !== expectedConnection)) return;
   hostConnections.delete(viewerId);
+  participantIds.delete(viewerId);
+  renderParticipantPresence();
   peerChannels.delete(viewerId);
   viewer.control.close();
   if (mesh?.peer(viewerId)) mesh.closePeer(viewerId);
@@ -762,6 +953,7 @@ function handlePeerClosed(peerId: string) {
   peerChannels.delete(peerId);
   incomingTextReceivers.get(peerId)?.close();
   incomingTextReceivers.delete(peerId);
+  remoteVideoStreams.delete(peerId);
   closeIncomingAudio(peerId);
   if (session.isHost) removeViewer(peerId);
   else if (peerId === session.hostId) endViewer('The room is no longer available.');
@@ -771,19 +963,29 @@ function handlePeerClosed(peerId: string) {
   }
 }
 
-async function setQuality(name: QualityName) {
-  const settings = qualityPresets[name];
-  currentQuality = name;
+async function setQuality(name: QualityName, customSettings?: NativeVideoSettings) {
+  const settings = name === 'custom' ? customSettings : qualityPresets[name];
+  if (!settings) return;
+  const previousCodec = currentStreamSettings.codec;
   currentStreamSettings = { ...settings };
-  localPresentation?.updateSettings(currentStreamSettings);
-  const videoTrack = localPresentation?.videoTrack;
-  if (videoTrack) {
-    try { await videoTrack.applyConstraints({ frameRate: { ideal: settings.frameRate, max: Math.max(12, settings.frameRate) } }); } catch {}
+  if (localPresentation && previousCodec !== settings.codec) {
+    const stream = localPresentation.stream;
+    localPresentation.stop(false);
+    localPresentation = createLocalPresentation(stream, currentStreamSettings);
+    await localPresentation.start();
+    connectLocalStreamToParticipants(session.isHost ? [...hostConnections.keys()] : [...peerChannels.keys()]);
+  } else {
+    localPresentation?.updateSettings(currentStreamSettings);
   }
+  await syncNativeVideoTrack();
   $('#quality-label').textContent = settings.buttonLabel;
   document.querySelectorAll<HTMLElement>('[data-quality]').forEach((button) => {
     button.classList.toggle('active', button.dataset.quality === name);
   });
+  $('#custom-quality-panel').hidden = name !== 'custom';
+  document.querySelector('[data-quality="custom"]')?.setAttribute('aria-expanded', String(name === 'custom'));
+  updatePipelineSummary();
+  updateBandwidthEstimate();
   if (localPresentation) {
     const presenter = localPresenterInfo();
     upsertPresenter(presenter);
@@ -804,13 +1006,58 @@ async function setQuality(name: QualityName) {
   showToast(`${settings.buttonLabel}: ${settings.label}.`);
 }
 
+function openCustomQuality() {
+  document.querySelectorAll<HTMLElement>('[data-quality]').forEach((button) => {
+    button.classList.toggle('active', button.dataset.quality === 'custom');
+  });
+  $('#custom-quality-panel').hidden = false;
+  document.querySelector('[data-quality="custom"]')?.setAttribute('aria-expanded', 'true');
+}
+
+function customVideoSettings(): NativeVideoSettings {
+  const [width, height] = ($('#custom-resolution').value || '1920x1080').split('x').map(Number);
+  const frameRate = Number($('#custom-frame-rate').value) || 30;
+  const compression = $('#custom-compression').value as NativeVideoSettings['compression'];
+  const pixelsPerSecond = width * height * frameRate;
+  const bitsPerPixel = compression === 'high' ? 0.045 : compression === 'low' ? 0.1 : 0.07;
+  const bitrate = Math.max(500_000, Math.round(pixelsPerSecond * bitsPerPixel / 100_000) * 100_000);
+  const resolutionLabel = height === 2160 ? '4K' : `${height}p`;
+  return {
+    codec: NATIVE_VIDEO_CODEC_ID,
+    width,
+    height,
+    frameRate,
+    bitrate,
+    compression,
+    label: `${resolutionLabel} · ${frameRate} fps · ${compression} compression`,
+    buttonLabel: 'Custom',
+  };
+}
+
+function updatePipelineSummary() {
+  const summary = $('#pipeline-summary');
+  const title = summary.querySelector('span');
+  const badge = summary.querySelector('b');
+  const description = summary.querySelector('p');
+  const text = currentStreamSettings.codec === TEXT_CODEC_ID;
+  if (title) title.textContent = text ? 'Pixel-exact tile deltas' : 'Browser video encoder';
+  if (badge) badge.textContent = text ? 'DEFLATE' : 'WebRTC';
+  if (description) description.textContent = text
+    ? 'Only changed 128 px tiles are sent through the custom lossless text pipeline.'
+    : 'Resolution, frame rate, and bitrate are handled by the browser’s native WebRTC media pipeline.';
+}
+
 function updateBandwidthEstimate() {
   const audience = localPresentation ? Math.max(0, session.participantCount - 1) : 0;
-  const lastFrameEstimate = currentStreamSettings.frameRate * 0.35;
-  const estimated = lastFrameEstimate * audience;
+  const perPeer = currentStreamSettings.codec === NATIVE_VIDEO_CODEC_ID
+    ? currentStreamSettings.bitrate / 1_000_000
+    : currentStreamSettings.frameRate * 0.35;
+  const estimated = perPeer * audience;
   $('#bandwidth-total').textContent = `≈${formatMbps(estimated)} Mbps`;
-  $('#bandwidth-detail').textContent = `Content-dependent lossless deltas × ${audience} ${audience === 1 ? 'peer' : 'peers'}`;
-  $('#bandwidth-capacity').textContent = `Text mode is lossless; motion can use substantially more bandwidth.`;
+  $('#bandwidth-detail').textContent = `${currentStreamSettings.codec === TEXT_CODEC_ID ? 'Content-dependent lossless deltas' : `Up to ${formatMbps(perPeer)} Mbps`} × ${audience} ${audience === 1 ? 'peer' : 'peers'}`;
+  $('#bandwidth-capacity').textContent = currentStreamSettings.codec === TEXT_CODEC_ID
+    ? 'Text mode prioritizes pixel-perfect detail over motion.'
+    : 'Native WebRTC adapts below this limit when the connection needs it.';
 }
 
 function formatMbps(value: number) {
@@ -1051,8 +1298,14 @@ function disposeConnections() {
   mesh?.close();
   mesh = undefined;
   peerChannels.clear();
+  participantIds.clear();
+  renderParticipantPresence();
   for (const receiver of incomingTextReceivers.values()) receiver.close();
   incomingTextReceivers.clear();
+  for (const stream of remoteVideoStreams.values()) {
+    for (const track of stream.getTracks()) track.stop();
+  }
+  remoteVideoStreams.clear();
   for (const audio of remoteAudioElements.values()) audio.srcObject = null;
   remoteAudioElements.clear();
 }
@@ -1138,9 +1391,11 @@ document.querySelectorAll<HTMLElement>('[data-quality-trigger]').forEach((button
 document.querySelectorAll<HTMLElement>('[data-quality]').forEach((button) => {
   button.addEventListener('click', () => {
     const quality = button.dataset.quality;
-    if (quality && quality in qualityPresets) void setQuality(quality as QualityName);
+    if (quality === 'custom') openCustomQuality();
+    else if (quality && quality in qualityPresets) void setQuality(quality as PresetName);
   });
 });
+$('#apply-custom-quality').addEventListener('click', () => void setQuality('custom', customVideoSettings()));
 document.addEventListener('click', (event) => {
   const target = event.target instanceof Element ? event.target : null;
   if (!target?.closest('[data-quality-trigger]') && !target?.closest('#quality-menu')) closeQualityMenu();

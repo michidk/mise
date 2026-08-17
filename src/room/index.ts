@@ -1,5 +1,6 @@
-export { parseHostRoomMessage, parsePresenter, parseTextSettings, parseViewerRoomMessage } from './internal/protocol.js';
+export { parseHostRoomMessage, parsePresenter, parseStreamSettings, parseTextSettings, parseViewerRoomMessage } from './internal/protocol.js';
 export { RoomSession } from './internal/session.js';
+export { guestIdentity, type GuestIdentity } from './internal/guest-identity.js';
 export type {
   ActivityKind,
   ChatActivity,
@@ -7,6 +8,7 @@ export type {
   ChatMessage,
   HostRoomMessage,
   PresenterInfo,
+  RoomStreamSettings,
   RoomConnectionState,
   RoomRole,
   RoomSessionSnapshot,

@@ -40,6 +40,6 @@ export interface RoomStore {
     now: number;
   }): Promise<boolean>;
   readSignals(roomId: string, participantId: string, after: number, now: number): Promise<SignalEnvelope[]>;
-  migrate?(): Promise<void>;
-  close?(): Promise<void>;
+  migrate(): Promise<void>;
+  close(): Promise<void>;
 }

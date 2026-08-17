@@ -6,6 +6,7 @@ import type {
   RoomParticipant,
   SignalBatch,
 } from '../../signaling/index.js';
+import { guestIdentity } from '../../room/index.js';
 import { passwordHash, randomToken, tokenHash, verifyPassword } from './crypto.js';
 import type { RoomStore, StoredParticipant } from './types.js';
 
@@ -68,18 +69,18 @@ export class RoomService {
     }
     const participantToken = randomToken();
     const participantId = makeParticipantId();
+    const participantName = guestIdentity(participantId).name;
     const result = await this.store.joinRoom(roomId, {
       id: participantId,
       roomId,
-      name: 'Guest',
+      name: participantName,
       tokenHash: tokenHash(participantToken),
       isHost: false,
       lastSeenAt: now,
     }, now);
     if (result.status === 'full') throw new RoomApiError('room-full', 409, 'This room has reached its participant limit.');
     if (result.status === 'unavailable') throw unavailable();
-    const guestNumber = result.participants.filter((participant) => !participant.isHost).length + 1;
-    const participant = { id: participantId, name: `Guest ${guestNumber}`, isHost: false };
+    const participant = { id: participantId, name: participantName, isHost: false };
     return {
       roomId,
       participant,
