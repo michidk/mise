@@ -1,10 +1,11 @@
 import path from 'node:path';
-import { and, eq, exists, gt, gte, isNull, lt, or, sql } from 'drizzle-orm';
+import { and, desc, eq, exists, gt, gte, isNull, lt, or, sql } from 'drizzle-orm';
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { Pool } from 'pg';
 import type { SignalEnvelope, SignalKind } from '../../signaling/index.js';
 import { roomParticipants, rooms, roomSignals } from './schema.js';
+import { withUniqueGuestName } from './guest-name.js';
 import type { JoinStoreResult, RoomStore, StoredParticipant, StoredRoom } from './types.js';
 
 const PARTICIPANT_STALE_MS = 60_000;
@@ -75,8 +76,10 @@ export class PostgresRoomStore implements RoomStore {
         .orderBy(roomParticipants.joinedAt);
       if (members.length >= room.maxParticipants) return { status: 'full' };
 
-      await insertParticipant(transaction, participant);
-      return { status: 'joined', participants: members.map(mapParticipant) };
+      const existing = members.map(mapParticipant);
+      const assignedParticipant = withUniqueGuestName(participant, existing);
+      await insertParticipant(transaction, assignedParticipant);
+      return { status: 'joined', participant: assignedParticipant, participants: existing };
     });
   }
 
@@ -192,6 +195,44 @@ export class PostgresRoomStore implements RoomStore {
       kind: signal.kind,
       payload: signal.payload,
     }));
+  }
+
+  async adminSnapshot() {
+    const [roomRows, participantRows, signalRows] = await Promise.all([
+      this.database.select().from(rooms).orderBy(desc(rooms.createdAt)),
+      this.database.select().from(roomParticipants).orderBy(desc(roomParticipants.joinedAt)),
+      this.database.select().from(roomSignals).orderBy(desc(roomSignals.createdAt)),
+    ]);
+    return {
+      generatedAt: Date.now(),
+      rooms: roomRows.map((room) => ({
+        id: room.id,
+        hostId: room.hostId,
+        protected: room.passwordHash !== null,
+        maxParticipants: room.maxParticipants,
+        createdAt: room.createdAt.getTime(),
+        expiresAt: room.expiresAt.getTime(),
+        closedAt: room.closedAt?.getTime() ?? null,
+      })),
+      participants: participantRows.map((participant) => ({
+        id: participant.id,
+        roomId: participant.roomId,
+        name: participant.name,
+        isHost: participant.isHost,
+        joinedAt: participant.joinedAt.getTime(),
+        lastSeenAt: participant.lastSeenAt.getTime(),
+      })),
+      signals: signalRows.map((signal) => ({
+        id: signal.id,
+        roomId: signal.roomId,
+        senderId: signal.senderId,
+        recipientId: signal.recipientId,
+        kind: signal.kind,
+        payloadBytes: Buffer.byteLength(JSON.stringify(signal.payload)),
+        createdAt: signal.createdAt.getTime(),
+        expiresAt: signal.expiresAt.getTime(),
+      })),
+    };
   }
 
   async close() {

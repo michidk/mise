@@ -3,16 +3,43 @@ import { test } from 'node:test';
 import {
   RoomSession,
   guestIdentity,
+  guestIdentityCount,
   parseHostRoomMessage,
   parseViewerRoomMessage,
 } from '../src/room/index.js';
 
-test('guest identities are stable anonymous animal collaborators', () => {
+test('guest identities provide a complete stable cycle of funny fake animals', () => {
   const first = guestIdentity('participant-random-id');
   assert.deepEqual(guestIdentity('participant-random-id'), first);
-  assert.match(first.name, /^Anonymous [A-Z][a-z]+$/);
+  assert.match(first.name, /^Anonymous [A-Z][a-z]+ [A-Z][a-z]+$/);
   assert.ok(first.emoji.length > 0);
   assert.ok(first.color >= 0 && first.color < 8);
+  const names = new Set(Array.from({ length: guestIdentityCount }, (_, attempt) => guestIdentity('participant-random-id', attempt).name));
+  assert.equal(guestIdentityCount, 768);
+  assert.equal(names.size, guestIdentityCount);
+});
+
+test('host protocol carries the authoritative participant names', () => {
+  assert.deepEqual(parseHostRoomMessage({
+    type: 'participant-joined',
+    participant: { id: 'guest-123', name: 'Anonymous Wobbly Bumbleyak', isHost: true },
+  }, 'host-room'), {
+    type: 'participant-joined',
+    participant: { id: 'guest-123', name: 'Anonymous Wobbly Bumbleyak', isHost: false },
+  });
+
+  assert.deepEqual(parseHostRoomMessage({
+    type: 'room-state',
+    presenters: [],
+    participants: [{ id: 'host-room', name: 'Host' }, { id: 'guest-123', name: 'Anonymous Wobbly Bumbleyak' }],
+  }, 'host-room'), {
+    type: 'room-state',
+    presenters: [],
+    participants: [
+      { id: 'host-room', name: 'Host', isHost: true },
+      { id: 'guest-123', name: 'Anonymous Wobbly Bumbleyak', isHost: false },
+    ],
+  });
 });
 
 const settings = {

@@ -9,11 +9,14 @@ import {
   parseHostRoomMessage,
   parseViewerRoomMessage,
   guestIdentity,
+  guestIdentityCount,
+  guestIdentityWithName,
   RoomSession,
   type ActivityKind,
   type ChatActivity,
   type ChatEntry,
   type ChatMessage,
+  type ParticipantInfo,
   type PresenterInfo,
   type RoomStreamSettings,
 } from './room/index.js';
@@ -141,6 +144,7 @@ const remoteVideoStreams = new Map<string, MediaStream>();
 const remoteAudioElements = new Map<string, HTMLAudioElement>();
 const mutedPresenters = new Set<string>();
 const participantIds = new Set<string>();
+const participantNames = new Map<string, string>();
 const chatHistory: ChatEntry[] = [];
 
 const configReady = fetch(appPath('config'))
@@ -398,23 +402,25 @@ function acceptViewer(peerConnection: RtcPeerChannels) {
   if (hostConnections.has(viewerId)) {
     return;
   }
-  hostConnections.set(viewerId, { control: connection, name: guestIdentity(viewerId).name, lastMessageAt: 0 });
+  const identity = uniqueGuestIdentity(viewerId);
+  hostConnections.set(viewerId, { control: connection, name: identity.name, lastMessageAt: 0 });
   participantIds.add(viewerId);
+  participantNames.set(viewerId, identity.name);
   renderParticipantPresence();
   const viewer = hostConnections.get(viewerId);
   if (!viewer) return;
   connection.send({ type: 'accepted', name: viewer.name, hostId: session.hostId });
   connection.send({ type: 'chat-history', messages: chatHistory });
-  connection.send({ type: 'room-state', presenters: [...presenters.values()] });
+  connection.send({ type: 'room-state', presenters: [...presenters.values()], participants: roomParticipants() });
   announceSystem(viewer.name, 'joined the room.', 'joined');
   broadcastParticipantCount();
   for (const presenter of presenters.values()) {
     if (presenter.id === session.hostId) connectLocalStreamTo(viewerId);
-    else hostConnections.get(presenter.id)?.control.send({ type: 'participant-joined', peerId: viewerId });
+    else hostConnections.get(presenter.id)?.control.send({ type: 'participant-joined', participant: participantInfo(viewerId, viewer.name) });
   }
   for (const [participantId, participant] of hostConnections) {
     if (participantId !== viewerId && participant.control.open) {
-      participant.control.send({ type: 'participant-joined', peerId: viewerId });
+      participant.control.send({ type: 'participant-joined', participant: participantInfo(viewerId, viewer.name) });
     }
   }
   connection.on('message', (value) => handleViewerData(viewerId, value));
@@ -451,6 +457,10 @@ function handleRoomMessage(value: unknown) {
       updateParticipantCount(message.participantCount);
       break;
     case 'room-state':
+      participantIds.clear();
+      participantNames.clear();
+      for (const participant of message.participants) rememberParticipant(participant);
+      renderParticipantPresence();
       for (const presenter of message.presenters) upsertPresenter(presenter);
       break;
     case 'stream-started':
@@ -469,12 +479,13 @@ function handleRoomMessage(value: unknown) {
       updateRoomUI();
       break;
     case 'participant-joined':
-      participantIds.add(message.peerId);
+      rememberParticipant(message.participant);
       renderParticipantPresence();
-      if (localPresentation) connectLocalStreamTo(message.peerId);
+      if (localPresentation) connectLocalStreamTo(message.participant.id);
       break;
     case 'participant-left':
       participantIds.delete(message.peerId);
+      participantNames.delete(message.peerId);
       renderParticipantPresence();
       disconnectLocalStreamFrom(message.peerId);
       if (presenters.has(message.peerId)) removePresenter(message.peerId);
@@ -884,10 +895,38 @@ function updateParticipantCount(count: number) {
 
 function syncSignalingParticipants(roomSignaling: RestSignalingSession) {
   participantIds.clear();
+  participantNames.clear();
   participantIds.add(roomSignaling.hostId);
+  participantNames.set(roomSignaling.hostId, 'Host');
   participantIds.add(roomSignaling.participantId);
-  for (const participant of roomSignaling.participants) participantIds.add(participant.id);
+  participantNames.set(roomSignaling.participantId, roomSignaling.participant.name);
+  for (const participant of roomSignaling.participants) {
+    participantIds.add(participant.id);
+    participantNames.set(participant.id, participant.name);
+  }
   renderParticipantPresence();
+}
+
+function uniqueGuestIdentity(participantId: string) {
+  const usedNames = new Set([...hostConnections.values()].map((viewer) => viewer.name));
+  for (let attempt = 0; attempt < guestIdentityCount; attempt += 1) {
+    const identity = guestIdentity(participantId, attempt);
+    if (!usedNames.has(identity.name)) return identity;
+  }
+  throw new Error('No anonymous guest identities are available.');
+}
+
+function participantInfo(id: string, name: string): ParticipantInfo {
+  return { id, name, isHost: id === session.hostId };
+}
+
+function roomParticipants(): ParticipantInfo[] {
+  return [participantInfo(session.hostId, 'Host'), ...[...hostConnections].map(([id, viewer]) => participantInfo(id, viewer.name))];
+}
+
+function rememberParticipant(participant: ParticipantInfo) {
+  participantIds.add(participant.id);
+  participantNames.set(participant.id, participant.name);
 }
 
 function renderParticipantPresence() {
@@ -900,10 +939,12 @@ function renderParticipantPresence() {
     const isHost = participantId === (signaling?.hostId || session.hostId);
     const isLocal = participantId === localId;
     const isSharing = presenters.has(participantId);
+    const assignedName = participantNames.get(participantId);
     const identity = isHost
       ? { name: 'Host', emoji: '👑', color: 0 }
-      : guestIdentity(participantId);
-    const label = `${identity.name}${isHost ? ' · Host' : ''}${isLocal ? ' · You' : ''}${isSharing ? ' · Sharing' : ''}`;
+      : assignedName ? guestIdentityWithName(participantId, assignedName) : guestIdentity(participantId);
+    const name = assignedName || identity.name;
+    const label = `${name}${isHost ? ' · Host' : ''}${isLocal ? ' · You' : ''}${isSharing ? ' · Sharing' : ''}`;
     const avatar = document.createElement('span');
     avatar.className = `participant-avatar color-${identity.color}${isHost ? ' host' : ''}${isSharing ? ' sharing' : ''}`;
     avatar.textContent = identity.emoji;
@@ -934,6 +975,7 @@ function removeViewer(viewerId: string, expectedConnection?: RtcChannel) {
   if (!viewer || (expectedConnection && viewer.control !== expectedConnection)) return;
   hostConnections.delete(viewerId);
   participantIds.delete(viewerId);
+  participantNames.delete(viewerId);
   renderParticipantPresence();
   peerChannels.delete(viewerId);
   viewer.control.close();
@@ -1299,6 +1341,7 @@ function disposeConnections() {
   mesh = undefined;
   peerChannels.clear();
   participantIds.clear();
+  participantNames.clear();
   renderParticipantPresence();
   for (const receiver of incomingTextReceivers.values()) receiver.close();
   incomingTextReceivers.clear();

@@ -19,9 +19,46 @@ export interface StoredParticipant {
 }
 
 export type JoinStoreResult =
-  | { status: 'joined'; participants: StoredParticipant[] }
+  | { status: 'joined'; participant: StoredParticipant; participants: StoredParticipant[] }
   | { status: 'full' }
   | { status: 'unavailable' };
+
+export interface AdminRoomRecord {
+  id: string;
+  hostId: string;
+  protected: boolean;
+  maxParticipants: number;
+  createdAt: number;
+  expiresAt: number;
+  closedAt: number | null;
+}
+
+export interface AdminParticipantRecord {
+  id: string;
+  roomId: string;
+  name: string;
+  isHost: boolean;
+  joinedAt: number;
+  lastSeenAt: number;
+}
+
+export interface AdminSignalRecord {
+  id: number;
+  roomId: string;
+  senderId: string;
+  recipientId: string;
+  kind: SignalKind;
+  payloadBytes: number;
+  createdAt: number;
+  expiresAt: number;
+}
+
+export interface AdminDatabaseSnapshot {
+  generatedAt: number;
+  rooms: AdminRoomRecord[];
+  participants: AdminParticipantRecord[];
+  signals: AdminSignalRecord[];
+}
 
 export interface RoomStore {
   createRoom(room: StoredRoom, host: StoredParticipant): Promise<void>;
@@ -40,6 +77,7 @@ export interface RoomStore {
     now: number;
   }): Promise<boolean>;
   readSignals(roomId: string, participantId: string, after: number, now: number): Promise<SignalEnvelope[]>;
+  adminSnapshot(): Promise<AdminDatabaseSnapshot>;
   migrate(): Promise<void>;
   close(): Promise<void>;
 }

@@ -58,6 +58,7 @@ Vercel serves files in `public/` from its CDN and runs the room REST API as stat
 | `BASE_PATH` | _(empty)_ | Optional URL prefix, such as `/previews/mise` |
 | `MAX_PARTICIPANTS` | `12` | Deployment ceiling for total room participants, including the host (2–12) |
 | `DATABASE_URL` | _(required)_ | PostgreSQL connection string; use Docker locally and Neon in production |
+| `ADMIN_PASSWORD` | `123` outside Vercel | Password for the read-only `/admin` database dashboard; required on Vercel |
 | `STUN_URLS` | `stun:main.lohr.dev:3478,stun:stun.l.google.com:19302` | Comma-separated STUN URLs; the second default is a public fallback and non-STUN entries are ignored |
 
 Browsers receive both defaults and may query them concurrently; WebRTC does not guarantee a strictly sequential failover order.

@@ -80,7 +80,7 @@ export class RoomService {
     }, now);
     if (result.status === 'full') throw new RoomApiError('room-full', 409, 'This room has reached its participant limit.');
     if (result.status === 'unavailable') throw unavailable();
-    const participant = { id: participantId, name: participantName, isHost: false };
+    const participant = { id: participantId, name: result.participant.name, isHost: false };
     return {
       roomId,
       participant,

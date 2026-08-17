@@ -10,6 +10,7 @@ import type {
   ChatEntry,
   ChatMessage,
   HostRoomMessage,
+  ParticipantInfo,
   PresenterInfo,
   ViewerRoomMessage,
 } from '../types.js';
@@ -43,8 +44,12 @@ export function parseHostRoomMessage(value: unknown, hostId: string): HostRoomMe
         ? { type: 'participant-count', participantCount: message.participantCount }
         : undefined;
     case 'room-state':
-      return Array.isArray(message.presenters)
-        ? { type: 'room-state', presenters: message.presenters.flatMap((entry) => parsePresenter(entry, hostId) ?? []) }
+      return Array.isArray(message.presenters) && Array.isArray(message.participants)
+        ? {
+            type: 'room-state',
+            presenters: message.presenters.flatMap((entry) => parsePresenter(entry, hostId) ?? []),
+            participants: message.participants.flatMap((entry) => parseParticipant(entry, hostId) ?? []),
+          }
         : undefined;
     case 'stream-started':
     case 'stream-settings':
@@ -61,14 +66,25 @@ export function parseHostRoomMessage(value: unknown, hostId: string): HostRoomMe
       const participants = message.participants.map(peerId).filter((id): id is string => Boolean(id));
       return participants.length === message.participants.length ? { type: 'share-approved', participants } : undefined;
     }
-    case 'participant-joined':
+    case 'participant-joined': {
+      const participant = parseParticipant(message.participant, hostId);
+      return participant ? { type: 'participant-joined', participant } : undefined;
+    }
     case 'participant-left': {
       const participantId = peerId(message.peerId);
-      return participantId ? { type: message.type, peerId: participantId } : undefined;
+      return participantId ? { type: 'participant-left', peerId: participantId } : undefined;
     }
     default:
       return undefined;
   }
+}
+
+function parseParticipant(value: unknown, hostId: string): ParticipantInfo | undefined {
+  const participant = record(value);
+  if (!participant) return undefined;
+  const id = peerId(participant.id);
+  const name = boundedString(participant.name, 40);
+  return id && name ? { id, name, isHost: id === hostId } : undefined;
 }
 
 export function parseViewerRoomMessage(value: unknown): ViewerRoomMessage | undefined {

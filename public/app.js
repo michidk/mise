@@ -1408,7 +1408,11 @@ function parseHostRoomMessage(value, hostId) {
     case "participant-count":
       return validInteger2(message.participantCount, 1, 100) ? { type: "participant-count", participantCount: message.participantCount } : void 0;
     case "room-state":
-      return Array.isArray(message.presenters) ? { type: "room-state", presenters: message.presenters.flatMap((entry) => parsePresenter(entry, hostId) ?? []) } : void 0;
+      return Array.isArray(message.presenters) && Array.isArray(message.participants) ? {
+        type: "room-state",
+        presenters: message.presenters.flatMap((entry) => parsePresenter(entry, hostId) ?? []),
+        participants: message.participants.flatMap((entry) => parseParticipant(entry, hostId) ?? [])
+      } : void 0;
     case "stream-started":
     case "stream-settings":
     case "stream-audio": {
@@ -1424,14 +1428,24 @@ function parseHostRoomMessage(value, hostId) {
       const participants = message.participants.map(peerId).filter((id) => Boolean(id));
       return participants.length === message.participants.length ? { type: "share-approved", participants } : void 0;
     }
-    case "participant-joined":
+    case "participant-joined": {
+      const participant = parseParticipant(message.participant, hostId);
+      return participant ? { type: "participant-joined", participant } : void 0;
+    }
     case "participant-left": {
       const participantId = peerId(message.peerId);
-      return participantId ? { type: message.type, peerId: participantId } : void 0;
+      return participantId ? { type: "participant-left", peerId: participantId } : void 0;
     }
     default:
       return void 0;
   }
+}
+function parseParticipant(value, hostId) {
+  const participant = record(value);
+  if (!participant) return void 0;
+  const id = peerId(participant.id);
+  const name = boundedString(participant.name, 40);
+  return id && name ? { id, name, isHost: id === hostId } : void 0;
 }
 function parseViewerRoomMessage(value) {
   const message = record(value);
@@ -1639,84 +1653,84 @@ var RoomSession = class {
 };
 
 // src/room/internal/guest-identity.ts
-var ANIMALS = [
-  ["Alpaca", "\u{1F999}"],
-  ["Axolotl", "\u{1F98E}"],
-  ["Badger", "\u{1F9A1}"],
-  ["Bat", "\u{1F987}"],
-  ["Bear", "\u{1F43B}"],
-  ["Beaver", "\u{1F9AB}"],
-  ["Bee", "\u{1F41D}"],
-  ["Bison", "\u{1F9AC}"],
-  ["Butterfly", "\u{1F98B}"],
-  ["Camel", "\u{1F42B}"],
-  ["Capybara", "\u{1F9A6}"],
-  ["Cat", "\u{1F408}"],
-  ["Chameleon", "\u{1F98E}"],
-  ["Cheetah", "\u{1F406}"],
-  ["Chicken", "\u{1F414}"],
-  ["Chipmunk", "\u{1F43F}\uFE0F"],
-  ["Cobra", "\u{1F40D}"],
-  ["Cow", "\u{1F404}"],
-  ["Crab", "\u{1F980}"],
-  ["Crocodile", "\u{1F40A}"],
-  ["Deer", "\u{1F98C}"],
-  ["Dodo", "\u{1F9A4}"],
-  ["Dolphin", "\u{1F42C}"],
-  ["Duck", "\u{1F986}"],
-  ["Eagle", "\u{1F985}"],
-  ["Elephant", "\u{1F418}"],
-  ["Flamingo", "\u{1F9A9}"],
-  ["Fox", "\u{1F98A}"],
-  ["Frog", "\u{1F438}"],
-  ["Giraffe", "\u{1F992}"],
-  ["Goat", "\u{1F410}"],
-  ["Gorilla", "\u{1F98D}"],
-  ["Hedgehog", "\u{1F994}"],
-  ["Hippo", "\u{1F99B}"],
-  ["Horse", "\u{1F40E}"],
-  ["Hummingbird", "\u{1F426}"],
-  ["Kangaroo", "\u{1F998}"],
-  ["Koala", "\u{1F428}"],
-  ["Ladybug", "\u{1F41E}"],
-  ["Leopard", "\u{1F406}"],
-  ["Lion", "\u{1F981}"],
-  ["Llama", "\u{1F999}"],
-  ["Lobster", "\u{1F99E}"],
-  ["Manatee", "\u{1F9AD}"],
-  ["Monkey", "\u{1F412}"],
-  ["Moose", "\u{1F9A4}"],
-  ["Mouse", "\u{1F401}"],
-  ["Octopus", "\u{1F419}"],
-  ["Orangutan", "\u{1F9A7}"],
-  ["Otter", "\u{1F9A6}"],
-  ["Owl", "\u{1F989}"],
-  ["Panda", "\u{1F43C}"],
-  ["Parrot", "\u{1F99C}"],
-  ["Peacock", "\u{1F99A}"],
-  ["Penguin", "\u{1F427}"],
-  ["Porcupine", "\u{1F994}"],
-  ["Rabbit", "\u{1F407}"],
-  ["Raccoon", "\u{1F99D}"],
-  ["Rhino", "\u{1F98F}"],
-  ["Seal", "\u{1F9AD}"],
-  ["Shark", "\u{1F988}"],
-  ["Sloth", "\u{1F9A5}"],
-  ["Snail", "\u{1F40C}"],
-  ["Swan", "\u{1F9A2}"],
-  ["Tiger", "\u{1F405}"],
-  ["Toucan", "\u{1F99C}"],
-  ["Turtle", "\u{1F422}"],
-  ["Walrus", "\u{1F9AD}"],
-  ["Whale", "\u{1F40B}"],
-  ["Wolf", "\u{1F43A}"],
-  ["Wombat", "\u{1F43B}"],
-  ["Zebra", "\u{1F993}"]
+var MOODS = [
+  "Bouncy",
+  "Cranky",
+  "Dapper",
+  "Dizzy",
+  "Fluffy",
+  "Giggly",
+  "Grumpy",
+  "Jolly",
+  "Loopy",
+  "Noodly",
+  "Pickled",
+  "Puffy",
+  "Sleepy",
+  "Sneaky",
+  "Sparkly",
+  "Spicy",
+  "Squiggly",
+  "Toasty",
+  "Wiggly",
+  "Wobbly",
+  "Wonky",
+  "Yappy",
+  "Zany",
+  "Zippy"
 ];
-function guestIdentity(participantId) {
+var CREATURES = [
+  ["Bumbleyak", "\u{1F9AC}"],
+  ["Chortlefox", "\u{1F98A}"],
+  ["Doodleduck", "\u{1F986}"],
+  ["Fizzlebear", "\u{1F43B}"],
+  ["Floofalope", "\u{1F999}"],
+  ["Fluffasaur", "\u{1F995}"],
+  ["Fumblebee", "\u{1F41D}"],
+  ["Gigglemoth", "\u{1F98B}"],
+  ["Gobblefinch", "\u{1F426}"],
+  ["Grumblepup", "\u{1F436}"],
+  ["Jellymoose", "\u{1F9A4}"],
+  ["Marshmole", "\u{1F994}"],
+  ["Muffalo", "\u{1F9AC}"],
+  ["Noodlebeast", "\u{1F98E}"],
+  ["Paddlebop", "\u{1F427}"],
+  ["Picklephant", "\u{1F418}"],
+  ["Pifflepanda", "\u{1F43C}"],
+  ["Ploomaroo", "\u{1F998}"],
+  ["Puffaroo", "\u{1F998}"],
+  ["Quirkadillo", "\u{1F994}"],
+  ["Rumbletoad", "\u{1F438}"],
+  ["Snickerbat", "\u{1F987}"],
+  ["Snortlehog", "\u{1F994}"],
+  ["Socksquatch", "\u{1F9A7}"],
+  ["Sprinkleotter", "\u{1F9A6}"],
+  ["Squishgull", "\u{1F426}"],
+  ["Taterbug", "\u{1F41E}"],
+  ["Toodleowl", "\u{1F989}"],
+  ["Wafflewombat", "\u{1F43B}"],
+  ["Wobblecat", "\u{1F408}"],
+  ["Yoodleyak", "\u{1F9AC}"],
+  ["Zoodlephant", "\u{1F418}"]
+];
+var IDENTITY_COUNT = MOODS.length * CREATURES.length;
+function guestIdentity(participantId, attempt = 0) {
   const hash = hashString(participantId);
-  const animal = ANIMALS[hash % ANIMALS.length];
-  return { name: `Anonymous ${animal[0]}`, emoji: animal[1], color: hash % 8 };
+  const index = (hash + normalizeAttempt(attempt) * 31) % IDENTITY_COUNT;
+  const mood = MOODS[index % MOODS.length];
+  const creature = CREATURES[Math.floor(index / MOODS.length)];
+  return { name: `Anonymous ${mood} ${creature[0]}`, emoji: creature[1], color: hash % 8 };
+}
+function guestIdentityWithName(participantId, name) {
+  for (let attempt = 0; attempt < IDENTITY_COUNT; attempt += 1) {
+    const identity = guestIdentity(participantId, attempt);
+    if (identity.name === name) return identity;
+  }
+  return guestIdentity(participantId);
+}
+var guestIdentityCount = IDENTITY_COUNT;
+function normalizeAttempt(attempt) {
+  return Number.isSafeInteger(attempt) && attempt > 0 ? attempt % IDENTITY_COUNT : 0;
 }
 function hashString(value) {
   let hash = 2166136261;
@@ -3619,6 +3633,7 @@ var remoteVideoStreams = /* @__PURE__ */ new Map();
 var remoteAudioElements = /* @__PURE__ */ new Map();
 var mutedPresenters = /* @__PURE__ */ new Set();
 var participantIds = /* @__PURE__ */ new Set();
+var participantNames = /* @__PURE__ */ new Map();
 var chatHistory = [];
 var configReady = fetch(appPath("config")).then((response) => response.json()).then((config) => {
   rtcConfig = { iceServers: config.iceServers };
@@ -3860,23 +3875,25 @@ function acceptViewer(peerConnection) {
   if (hostConnections.has(viewerId)) {
     return;
   }
-  hostConnections.set(viewerId, { control: connection, name: guestIdentity(viewerId).name, lastMessageAt: 0 });
+  const identity = uniqueGuestIdentity(viewerId);
+  hostConnections.set(viewerId, { control: connection, name: identity.name, lastMessageAt: 0 });
   participantIds.add(viewerId);
+  participantNames.set(viewerId, identity.name);
   renderParticipantPresence();
   const viewer = hostConnections.get(viewerId);
   if (!viewer) return;
   connection.send({ type: "accepted", name: viewer.name, hostId: session.hostId });
   connection.send({ type: "chat-history", messages: chatHistory });
-  connection.send({ type: "room-state", presenters: [...presenters.values()] });
+  connection.send({ type: "room-state", presenters: [...presenters.values()], participants: roomParticipants() });
   announceSystem(viewer.name, "joined the room.", "joined");
   broadcastParticipantCount();
   for (const presenter of presenters.values()) {
     if (presenter.id === session.hostId) connectLocalStreamTo(viewerId);
-    else hostConnections.get(presenter.id)?.control.send({ type: "participant-joined", peerId: viewerId });
+    else hostConnections.get(presenter.id)?.control.send({ type: "participant-joined", participant: participantInfo(viewerId, viewer.name) });
   }
   for (const [participantId, participant] of hostConnections) {
     if (participantId !== viewerId && participant.control.open) {
-      participant.control.send({ type: "participant-joined", peerId: viewerId });
+      participant.control.send({ type: "participant-joined", participant: participantInfo(viewerId, viewer.name) });
     }
   }
   connection.on("message", (value) => handleViewerData(viewerId, value));
@@ -3912,6 +3929,10 @@ function handleRoomMessage(value) {
       updateParticipantCount(message.participantCount);
       break;
     case "room-state":
+      participantIds.clear();
+      participantNames.clear();
+      for (const participant of message.participants) rememberParticipant(participant);
+      renderParticipantPresence();
       for (const presenter of message.presenters) upsertPresenter(presenter);
       break;
     case "stream-started":
@@ -3930,12 +3951,13 @@ function handleRoomMessage(value) {
       updateRoomUI();
       break;
     case "participant-joined":
-      participantIds.add(message.peerId);
+      rememberParticipant(message.participant);
       renderParticipantPresence();
-      if (localPresentation) connectLocalStreamTo(message.peerId);
+      if (localPresentation) connectLocalStreamTo(message.participant.id);
       break;
     case "participant-left":
       participantIds.delete(message.peerId);
+      participantNames.delete(message.peerId);
       renderParticipantPresence();
       disconnectLocalStreamFrom(message.peerId);
       if (presenters.has(message.peerId)) removePresenter(message.peerId);
@@ -4314,10 +4336,34 @@ function updateParticipantCount(count) {
 }
 function syncSignalingParticipants(roomSignaling) {
   participantIds.clear();
+  participantNames.clear();
   participantIds.add(roomSignaling.hostId);
+  participantNames.set(roomSignaling.hostId, "Host");
   participantIds.add(roomSignaling.participantId);
-  for (const participant of roomSignaling.participants) participantIds.add(participant.id);
+  participantNames.set(roomSignaling.participantId, roomSignaling.participant.name);
+  for (const participant of roomSignaling.participants) {
+    participantIds.add(participant.id);
+    participantNames.set(participant.id, participant.name);
+  }
   renderParticipantPresence();
+}
+function uniqueGuestIdentity(participantId) {
+  const usedNames = new Set([...hostConnections.values()].map((viewer) => viewer.name));
+  for (let attempt = 0; attempt < guestIdentityCount; attempt += 1) {
+    const identity = guestIdentity(participantId, attempt);
+    if (!usedNames.has(identity.name)) return identity;
+  }
+  throw new Error("No anonymous guest identities are available.");
+}
+function participantInfo(id, name) {
+  return { id, name, isHost: id === session.hostId };
+}
+function roomParticipants() {
+  return [participantInfo(session.hostId, "Host"), ...[...hostConnections].map(([id, viewer]) => participantInfo(id, viewer.name))];
+}
+function rememberParticipant(participant) {
+  participantIds.add(participant.id);
+  participantNames.set(participant.id, participant.name);
 }
 function renderParticipantPresence() {
   const container = document.querySelector("#participant-avatars");
@@ -4329,8 +4375,10 @@ function renderParticipantPresence() {
     const isHost = participantId === (signaling?.hostId || session.hostId);
     const isLocal = participantId === localId;
     const isSharing = presenters.has(participantId);
-    const identity = isHost ? { name: "Host", emoji: "\u{1F451}", color: 0 } : guestIdentity(participantId);
-    const label = `${identity.name}${isHost ? " \xB7 Host" : ""}${isLocal ? " \xB7 You" : ""}${isSharing ? " \xB7 Sharing" : ""}`;
+    const assignedName = participantNames.get(participantId);
+    const identity = isHost ? { name: "Host", emoji: "\u{1F451}", color: 0 } : assignedName ? guestIdentityWithName(participantId, assignedName) : guestIdentity(participantId);
+    const name = assignedName || identity.name;
+    const label = `${name}${isHost ? " \xB7 Host" : ""}${isLocal ? " \xB7 You" : ""}${isSharing ? " \xB7 Sharing" : ""}`;
     const avatar = document.createElement("span");
     avatar.className = `participant-avatar color-${identity.color}${isHost ? " host" : ""}${isSharing ? " sharing" : ""}`;
     avatar.textContent = identity.emoji;
@@ -4359,6 +4407,7 @@ function removeViewer(viewerId, expectedConnection) {
   if (!viewer || expectedConnection && viewer.control !== expectedConnection) return;
   hostConnections.delete(viewerId);
   participantIds.delete(viewerId);
+  participantNames.delete(viewerId);
   renderParticipantPresence();
   peerChannels.delete(viewerId);
   viewer.control.close();
@@ -4692,6 +4741,7 @@ function disposeConnections() {
   mesh = void 0;
   peerChannels.clear();
   participantIds.clear();
+  participantNames.clear();
   renderParticipantPresence();
   for (const receiver of incomingTextReceivers.values()) receiver.close();
   incomingTextReceivers.clear();

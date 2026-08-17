@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
+import { createAdminRouter } from './src/admin.js';
 import { createRoomApi } from './src/room-api/index.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -20,6 +21,8 @@ const roomHtml = indexHtml.replace('<base href="/" />', '<base href="../" />');
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error('DATABASE_URL is required for room signaling.');
+const adminPassword = process.env.ADMIN_PASSWORD || (process.env.VERCEL ? '' : '123');
+if (!adminPassword) throw new Error('ADMIN_PASSWORD is required on Vercel.');
 
 const app = express();
 const server = http.createServer(app);
@@ -40,6 +43,12 @@ app.use((_, response, next) => {
 });
 
 app.use(route('/api/rooms'), express.json({ limit: '192kb' }), roomApi.router);
+app.use(route('/admin'), createAdminRouter({
+  password: adminPassword,
+  basePath: route('/admin'),
+  secureCookie: Boolean(process.env.VERCEL),
+  snapshot: () => roomApi.adminSnapshot(),
+}));
 
 app.get(route('/health'), (_, response) => response.json({ ok: true }));
 app.get(route('/config'), (_, response) => {

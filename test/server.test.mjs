@@ -40,6 +40,7 @@ before(async () => {
     cwd: new URL('..', import.meta.url),
     env: {
       ...process.env,
+      ADMIN_PASSWORD: '123',
       PORT: String(port),
       STUN_URLS: 'turn:relay.invalid:3478, stun:main.lohr.dev:3478, stun:stun.l.google.com:19302',
     },
@@ -61,6 +62,17 @@ test('refuses to start without a PostgreSQL connection', () => {
   });
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /DATABASE_URL is required for room signaling/);
+});
+
+test('requires an explicit admin password on Vercel', () => {
+  const { ADMIN_PASSWORD: _, ...env } = process.env;
+  const result = spawnSync(process.execPath, ['--import', 'tsx', 'server.ts'], {
+    cwd: new URL('..', import.meta.url),
+    env: { ...env, VERCEL: '1' },
+    encoding: 'utf8',
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /ADMIN_PASSWORD is required on Vercel/);
 });
 
 test('serves the app and public client configuration', async () => {
@@ -126,6 +138,90 @@ test('serves the app and public client configuration', async () => {
   assert.match(page, /href="https:\/\/github\.com\/michidk\/mise"/);
 });
 
+test('admin dashboard requires its password and renders a redacted database overview', async () => {
+  const signedOut = await fetch(`${baseUrl}/admin/`);
+  const signedOutPage = await signedOut.text();
+  assert.equal(signedOut.status, 200);
+  assert.match(signedOutPage, /Admin dashboard/);
+  assert.doesNotMatch(signedOutPage, /Database overview/);
+  assert.match(signedOut.headers.get('cache-control'), /no-store/);
+  assert.equal((await fetch(`${baseUrl}/admin/data`)).status, 401);
+
+  const rejected = await fetch(`${baseUrl}/admin/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: 'password=wrong',
+  });
+  assert.equal(rejected.status, 401);
+
+  const accepted = await fetch(`${baseUrl}/admin/login`, {
+    method: 'POST',
+    redirect: 'manual',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: 'password=123',
+  });
+  assert.equal(accepted.status, 303);
+  const cookie = accepted.headers.get('set-cookie');
+  assert.match(cookie, /mise_admin_session=/);
+  assert.match(cookie, /HttpOnly/);
+  assert.match(cookie, /SameSite=Strict/);
+
+  const seededRooms = [];
+  for (let index = 0; index < 27; index += 1) {
+    const created = await roomRequest('', { method: 'POST', body: JSON.stringify({ maxParticipants: 2 }) });
+    assert.equal(created.status, 201);
+    seededRooms.push(await created.json());
+  }
+  const closedRoom = seededRooms[0];
+  const closed = await roomRequest(`/${closedRoom.roomId}`, { identity: closedRoom, method: 'DELETE' });
+  assert.equal(closed.status, 204);
+
+  const authHeaders = { cookie: cookie.split(';')[0] };
+  const dashboard = await fetch(`${baseUrl}/admin/`, { headers: authHeaders });
+  const dashboardPage = await dashboard.text();
+  assert.equal(dashboard.status, 200);
+  assert.match(dashboardPage, /<h1[^>]*>Overview<\/h1>/);
+  assert.match(dashboardPage, /Database totals/);
+  assert.match(dashboardPage, /Database models/);
+  assert.match(dashboardPage, /Rooms model/);
+  assert.match(dashboardPage, /admin\.js/);
+  assert.match(dashboardPage, /Updated automatically with TanStack Query/);
+  assert.doesNotMatch(dashboardPage, /Refresh|Read-only access/);
+  assert.doesNotMatch(dashboardPage, /password_hash|token_hash/i);
+  assert.match(dashboard.headers.get('content-security-policy'), /default-src 'none'/);
+  assert.match(dashboard.headers.get('content-security-policy'), /script-src 'self'/);
+
+  const adminClient = await fetch(`${baseUrl}/admin.js`).then((response) => response.text());
+  assert.match(adminClient, /admin-view/);
+  assert.match(adminClient, /refetchInterval/);
+
+  const activeSessions = await fetch(`${baseUrl}/admin/?view=sessions&state=active`, { headers: authHeaders }).then((response) => response.text());
+  assert.match(activeSessions, /<h1[^>]*>Sessions<\/h1>/);
+  assert.match(activeSessions, /Active sessions/);
+  assert.match(activeSessions, /Past <b>/);
+  assert.match(activeSessions, /Page 1 of (?:[2-9]|[1-9]\d+)/);
+
+  const secondSessionPage = await fetch(`${baseUrl}/admin/?view=sessions&state=active&page=2`, { headers: authHeaders }).then((response) => response.text());
+  assert.match(secondSessionPage, /Page 2 of (?:[2-9]|[1-9]\d+)/);
+
+  const pastSessions = await fetch(`${baseUrl}/admin/?view=sessions&state=past`, { headers: authHeaders }).then((response) => response.text());
+  assert.match(pastSessions, /Past sessions/);
+  assert.match(pastSessions, new RegExp(closedRoom.roomId));
+
+  const participants = await fetch(`${baseUrl}/admin/?view=participants`, { headers: authHeaders }).then((response) => response.text());
+  assert.match(participants, /<h1[^>]*>Participants<\/h1>/);
+  assert.match(participants, /Page 1 of (?:[2-9]|[1-9]\d+)/);
+
+  const participantData = await fetch(`${baseUrl}/admin/data?view=participants&page=2`, { headers: authHeaders }).then((response) => response.json());
+  assert.equal(participantData.view, 'participants');
+  assert.equal(participantData.title, 'Participants');
+  assert.match(participantData.content, /Page 2 of/);
+
+  const signals = await fetch(`${baseUrl}/admin/?view=signals`, { headers: authHeaders }).then((response) => response.text());
+  assert.match(signals, /<h1[^>]*>WebRTC signals<\/h1>/);
+  assert.match(signals, /Signaling payload contents are masked/);
+});
+
 test('room API enforces passwords and participant limits', async () => {
   const invalidLimit = await roomRequest('', {
     method: 'POST',
@@ -159,7 +255,7 @@ test('room API enforces passwords and participant limits', async () => {
   assert.equal(joinedResponse.status, 201);
   const viewer = await joinedResponse.json();
   assert.equal(viewer.hostId, host.hostId);
-  assert.match(viewer.participant.name, /^Anonymous [A-Z][a-z]+$/);
+  assert.match(viewer.participant.name, /^Anonymous [A-Z][a-z]+ [A-Z][a-z]+$/);
   assert.deepEqual(viewer.participants.map(({ id }) => id), [host.participant.id]);
 
   const fullResponse = await roomRequest(`/${host.roomId}/join`, {
@@ -168,6 +264,24 @@ test('room API enforces passwords and participant limits', async () => {
   });
   assert.equal(fullResponse.status, 409);
   assert.equal((await fullResponse.json()).error.code, 'room-full');
+});
+
+test('room API assigns unique funny names through the full room capacity', async () => {
+  const host = await roomRequest('', {
+    method: 'POST',
+    body: JSON.stringify({ maxParticipants: 12 }),
+  }).then((response) => response.json());
+  const names = [];
+  for (let index = 1; index < 12; index += 1) {
+    const viewer = await roomRequest(`/${host.roomId}/join`, {
+      method: 'POST',
+      body: '{}',
+    }).then((response) => response.json());
+    names.push(viewer.participant.name);
+  }
+  assert.equal(names.length, 11);
+  assert.equal(new Set(names).size, names.length);
+  assert.ok(names.every((name) => /^Anonymous [A-Z][a-z]+ [A-Z][a-z]+$/.test(name)));
 });
 
 test('room API relays authenticated WebRTC signaling through a durable mailbox', async () => {

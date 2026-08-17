@@ -12,6 +12,12 @@ export interface PresenterInfo {
   settings: RoomStreamSettings;
 }
 
+export interface ParticipantInfo {
+  id: string;
+  name: string;
+  isHost: boolean;
+}
+
 export interface ChatMessage {
   type: 'chat';
   id: string;
@@ -40,11 +46,12 @@ export type HostRoomMessage =
   | { type: 'chat-history'; messages: ChatEntry[] }
   | ChatEntry
   | { type: 'participant-count'; participantCount: number }
-  | { type: 'room-state'; presenters: PresenterInfo[] }
+  | { type: 'room-state'; presenters: PresenterInfo[]; participants: ParticipantInfo[] }
   | { type: 'stream-started' | 'stream-settings' | 'stream-audio'; presenter: PresenterInfo }
   | { type: 'stream-stopped'; presenterId: string }
   | { type: 'share-approved'; participants: string[] }
-  | { type: 'participant-joined' | 'participant-left'; peerId: string };
+  | { type: 'participant-joined'; participant: ParticipantInfo }
+  | { type: 'participant-left'; peerId: string };
 
 export type ViewerRoomMessage =
   | { type: 'stream-started'; streamSettings?: RoomStreamSettings; audioEnabled: boolean }
