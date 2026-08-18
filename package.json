@@ -22,12 +22,17 @@
     "db:migrate": "node --import tsx scripts/migrate.ts",
     "db:up": "docker compose up -d --wait database",
     "dev": "npm run build:client && node --import tsx --watch server.ts",
+    "lint": "eslint server.ts scripts src test e2e *.ts *.js",
     "start": "npm run build:client && node --import tsx server.ts",
     "pretest": "npm run build && npm run db:migrate",
     "test": "node --import tsx --test",
+    "pretest:e2e": "npm run build && npm run db:migrate",
+    "test:e2e": "playwright test",
     "test:unit": "node --import tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit",
-    "verify": "npm test",
+    "verify": "npm test && npm run lint && npm run db:check",
+    "verify:fast": "npm run build && npm run test:unit && npm run lint",
+    "verify:full": "npm run verify && npm run test:e2e",
     "vercel-build": "npm run build"
   },
   "engines": {
@@ -43,12 +48,17 @@
     "pg": "^8.23.0"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.62.1",
     "@types/express": "^5.0.5",
     "@types/node": "^24.10.13",
     "@types/pg": "^8.21.0",
     "drizzle-kit": "^0.31.10",
     "esbuild": "^0.25.9",
+    "eslint": "^10.8.1",
+    "globals": "^17.11.0",
     "tsx": "^4.23.12",
-    "typescript": "^6.0.2"
+    "typescript": "^6.0.2",
+    "typescript-eslint": "^8.67.0"
   }
 }

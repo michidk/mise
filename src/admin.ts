@@ -1,18 +1,19 @@
-import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
-import { Router, urlencoded } from 'express';
-import type { AdminDatabaseSnapshot } from './room-api/index.js';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { Router, urlencoded, type Request } from 'express';
+import type { AdminDatabaseSnapshot, AdminSnapshotQuery } from './room-api/index.js';
 
 const SESSION_COOKIE = 'mise_admin_session';
-const PARTICIPANT_ACTIVE_MS = 60_000;
+const SESSION_MAX_AGE_SECONDS = 8 * 60 * 60;
 
 export function createAdminRouter(options: {
   password: string;
+  sessionSecret: string;
   basePath: string;
   secureCookie: boolean;
-  snapshot(): Promise<AdminDatabaseSnapshot>;
+  rateLimit(identity: string): Promise<{ allowed: boolean; retryAfterSeconds: number }>;
+  snapshot(query: AdminSnapshotQuery): Promise<AdminDatabaseSnapshot>;
 }) {
   const router = Router();
-  const sessionToken = createHmac('sha256', options.password).update('mise-admin-session-v1').digest('base64url');
   router.use((_, response, next) => {
     response.set({
       'Cache-Control': 'private, no-store',
@@ -23,16 +24,13 @@ export function createAdminRouter(options: {
   router.use('/login', urlencoded({ extended: false, limit: '2kb' }));
 
   router.get('/data', async (request, response) => {
-    if (!validSession(request.headers.cookie, sessionToken)) {
+    if (!validSession(request.headers.cookie, options.sessionSecret)) {
       response.status(401).json({ error: 'Admin authentication required.' });
       return;
     }
     try {
-      response.json(dashboardState(await options.snapshot(), options.basePath, {
-        view: queryValue(request.query.view),
-        state: queryValue(request.query.state),
-        page: queryValue(request.query.page),
-      }));
+      const query = dashboardQuery(request.query);
+      response.json(dashboardState(await options.snapshot(query), options.basePath, query));
     } catch (error) {
       console.error('Could not load the admin database snapshot.', error);
       response.status(500).json({ error: 'The database snapshot could not be loaded.' });
@@ -40,29 +38,39 @@ export function createAdminRouter(options: {
   });
 
   router.get('/', async (request, response) => {
-    if (!validSession(request.headers.cookie, sessionToken)) {
+    if (!validSession(request.headers.cookie, options.sessionSecret)) {
       response.status(200).type('html').send(loginPage(options.basePath));
       return;
     }
     try {
-      response.type('html').send(dashboardPage(await options.snapshot(), options.basePath, {
-        view: queryValue(request.query.view),
-        state: queryValue(request.query.state),
-        page: queryValue(request.query.page),
-      }));
+      const query = dashboardQuery(request.query);
+      response.type('html').send(dashboardPage(await options.snapshot(query), options.basePath, query));
     } catch (error) {
       console.error('Could not load the admin database snapshot.', error);
       response.status(500).type('html').send(page('Admin unavailable', '<main class="login-shell"><section class="login-card"><span class="eyebrow">mise operations</span><h1>Dashboard unavailable</h1><p>The database snapshot could not be loaded. Try again shortly.</p></section></main>'));
     }
   });
 
-  router.post('/login', (request, response) => {
+  router.post('/login', async (request, response) => {
+    let limit: Awaited<ReturnType<typeof options.rateLimit>>;
+    try {
+      limit = await options.rateLimit(clientIdentity(request));
+    } catch (error) {
+      console.error('Could not apply the admin login rate limit.', error);
+      response.status(503).type('html').send(loginPage(options.basePath, 'Sign-in is temporarily unavailable. Try again shortly.'));
+      return;
+    }
+    if (!limit.allowed) {
+      response.set('Retry-After', String(limit.retryAfterSeconds));
+      response.status(429).type('html').send(loginPage(options.basePath, 'Too many sign-in attempts. Try again later.'));
+      return;
+    }
     const password = typeof request.body?.password === 'string' ? request.body.password : '';
     if (!sameSecret(password, options.password)) {
       response.status(401).type('html').send(loginPage(options.basePath, 'Incorrect password.'));
       return;
     }
-    response.setHeader('Set-Cookie', cookieValue(sessionToken, options.basePath, options.secureCookie));
+    response.setHeader('Set-Cookie', cookieValue(issueSession(options.sessionSecret), options.basePath, options.secureCookie));
     response.redirect(303, `${options.basePath}/`);
   });
 
@@ -73,9 +81,21 @@ export function createAdminRouter(options: {
   return router;
 }
 
-function validSession(cookieHeader: string | undefined, expected: string) {
-  const value = cookieHeader?.split(';').map((part) => part.trim()).find((part) => part.startsWith(`${SESSION_COOKIE}=`))?.slice(SESSION_COOKIE.length + 1) ?? '';
-  return sameSecret(value, expected);
+function validSession(cookieHeader: string | undefined, secret: string, now = Date.now()) {
+  const token = cookieHeader?.split(';').map((part) => part.trim()).find((part) => part.startsWith(`${SESSION_COOKIE}=`))?.slice(SESSION_COOKIE.length + 1) ?? '';
+  const [expiresValue, nonce, signature] = token.split('.');
+  const expiresAt = Number(expiresValue);
+  if (!Number.isSafeInteger(expiresAt) || expiresAt <= now || !nonce || !signature) return false;
+  return sameSecret(signature, signSession(`${expiresValue}.${nonce}`, secret));
+}
+
+function issueSession(secret: string, now = Date.now()) {
+  const body = `${now + SESSION_MAX_AGE_SECONDS * 1_000}.${randomBytes(16).toString('base64url')}`;
+  return `${body}.${signSession(body, secret)}`;
+}
+
+function signSession(value: string, secret: string) {
+  return createHmac('sha256', secret).update(value).digest('base64url');
 }
 
 function sameSecret(left: string, right: string) {
@@ -85,11 +105,15 @@ function sameSecret(left: string, right: string) {
 }
 
 function cookieValue(token: string, basePath: string, secure: boolean) {
-  return `${SESSION_COOKIE}=${token}; Path=${basePath}; HttpOnly; SameSite=Strict; Max-Age=28800${secure ? '; Secure' : ''}`;
+  return `${SESSION_COOKIE}=${token}; Path=${basePath}; HttpOnly; SameSite=Strict; Max-Age=${SESSION_MAX_AGE_SECONDS}${secure ? '; Secure' : ''}`;
 }
 
 function expiredCookie(basePath: string, secure: boolean) {
   return `${SESSION_COOKIE}=; Path=${basePath}; HttpOnly; SameSite=Strict; Max-Age=0${secure ? '; Secure' : ''}`;
+}
+
+function clientIdentity(request: Request) {
+  return request.ip || request.socket.remoteAddress || 'unknown';
 }
 
 function loginPage(basePath: string, error = '') {
@@ -106,10 +130,10 @@ function loginPage(basePath: string, error = '') {
     </main>`);
 }
 
-type AdminView = 'overview' | 'sessions' | 'participants' | 'signals';
+type AdminView = AdminSnapshotQuery['view'];
 const PAGE_SIZE = 25;
 
-function dashboardPage(snapshot: AdminDatabaseSnapshot, basePath: string, query: { view?: string; state?: string; page?: string }) {
+function dashboardPage(snapshot: AdminDatabaseSnapshot, basePath: string, query: AdminSnapshotQuery) {
   const state = dashboardState(snapshot, basePath, query);
   return page('Database overview', `
     <div class="admin-shell" data-admin-root data-endpoint="${escapeHtml(basePath)}/data">
@@ -124,17 +148,11 @@ function dashboardPage(snapshot: AdminDatabaseSnapshot, basePath: string, query:
     </div>`, adminAssetPath(basePath));
 }
 
-function dashboardState(snapshot: AdminDatabaseSnapshot, basePath: string, query: { view?: string; state?: string; page?: string }) {
+function dashboardState(snapshot: AdminDatabaseSnapshot, basePath: string, query: AdminSnapshotQuery) {
   const now = snapshot.generatedAt;
-  const activeRooms = snapshot.rooms.filter((room) => room.closedAt === null && room.expiresAt > now);
-  const pastRooms = snapshot.rooms.filter((room) => room.closedAt !== null || room.expiresAt <= now);
-  const activeRoomIds = new Set(activeRooms.map((room) => room.id));
-  const activeParticipants = snapshot.participants.filter((participant) => activeRoomIds.has(participant.roomId) && participant.lastSeenAt >= now - PARTICIPANT_ACTIVE_MS);
-  const activeSignals = snapshot.signals.filter((signal) => signal.expiresAt > now);
-  const view: AdminView = ['sessions', 'participants', 'signals'].includes(query.view ?? '') ? query.view as AdminView : 'overview';
-  const sessionState = query.state === 'past' ? 'past' : 'active';
-  const requestedPage = Math.max(1, Number.parseInt(query.page ?? '1', 10) || 1);
-  const context = { now, activeRooms, pastRooms, activeRoomIds, activeParticipants, activeSignals };
+  const view = query.view;
+  const sessionState = query.state;
+  const context = { now };
   const titles: Record<AdminView, string> = {
     overview: 'Overview',
     sessions: 'Sessions',
@@ -146,9 +164,9 @@ function dashboardState(snapshot: AdminDatabaseSnapshot, basePath: string, query
     title: titles[view],
     generatedAt: now,
     content: `${view === 'overview' ? overviewView(snapshot, context) : ''}
-      ${view === 'sessions' ? sessionsView(snapshot, context, basePath, sessionState, requestedPage) : ''}
-      ${view === 'participants' ? participantsView(snapshot, context, basePath, requestedPage) : ''}
-      ${view === 'signals' ? signalsView(snapshot, context, basePath, requestedPage) : ''}
+      ${view === 'sessions' ? sessionsView(snapshot, context, basePath, sessionState) : ''}
+      ${view === 'participants' ? participantsView(snapshot, context, basePath) : ''}
+      ${view === 'signals' ? signalsView(snapshot, context, basePath) : ''}
       <p class="retention">Past rooms are visible only while retained by the database cleanup policy. Password and participant-token hashes are intentionally never rendered.</p>`,
   };
 }
@@ -165,76 +183,57 @@ function sidebar(basePath: string, activeView: AdminView) {
 
 function overviewView(snapshot: AdminDatabaseSnapshot, context: DashboardContext) {
   return `<section class="stats" aria-label="Database totals">
-      ${stat('Active sessions', context.activeRooms.length, 'live')}
-      ${stat('Past sessions', context.pastRooms.length)}
-      ${stat('Active participants', context.activeParticipants.length, 'live')}
-      ${stat('Stored participants', snapshot.participants.length)}
-      ${stat('Live signals', context.activeSignals.length, 'live')}
-      ${stat('Stored signals', snapshot.signals.length)}
+      ${stat('Active sessions', snapshot.counts.activeRooms, 'live')}
+      ${stat('Past sessions', snapshot.counts.pastRooms)}
+      ${stat('Active participants', snapshot.counts.activeParticipants, 'live')}
+      ${stat('Stored participants', snapshot.counts.storedParticipants)}
+      ${stat('Live signals', snapshot.counts.activeSignals, 'live')}
+      ${stat('Stored signals', snapshot.counts.storedSignals)}
     </section>
     <section class="overview-grid">
-      <article class="summary-card"><span class="eyebrow">Rooms model</span><strong>${snapshot.rooms.length}</strong><p>Total retained session rows</p></article>
-      <article class="summary-card"><span class="eyebrow">Participants model</span><strong>${snapshot.participants.length}</strong><p>Host and guest rows</p></article>
-      <article class="summary-card"><span class="eyebrow">Signals model</span><strong>${snapshot.signals.length}</strong><p>Ephemeral signaling rows</p></article>
+      <article class="summary-card"><span class="eyebrow">Rooms model</span><strong>${snapshot.counts.storedRooms}</strong><p>Total retained session rows</p></article>
+      <article class="summary-card"><span class="eyebrow">Participants model</span><strong>${snapshot.counts.storedParticipants}</strong><p>Host and guest rows</p></article>
+      <article class="summary-card"><span class="eyebrow">Signals model</span><strong>${snapshot.counts.storedSignals}</strong><p>Ephemeral signaling rows</p></article>
     </section>
-    ${roomTable('Recently active', context.activeRooms.slice(0, 5), snapshot, context.now, true)}`;
+    ${roomTable('Recently active', snapshot.rooms, context.now, true)}`;
 }
 
 type DashboardContext = {
   now: number;
-  activeRooms: AdminDatabaseSnapshot['rooms'];
-  pastRooms: AdminDatabaseSnapshot['rooms'];
-  activeRoomIds: Set<string>;
-  activeParticipants: AdminDatabaseSnapshot['participants'];
-  activeSignals: AdminDatabaseSnapshot['signals'];
 };
 
-function sessionsView(snapshot: AdminDatabaseSnapshot, context: DashboardContext, basePath: string, state: 'active' | 'past', requestedPage: number) {
-  const rows = state === 'active' ? context.activeRooms : context.pastRooms;
-  const result = paginate(rows, requestedPage);
-  return `<div class="view-toolbar"><div class="segmented" aria-label="Session status"><a data-admin-nav class="${state === 'active' ? 'active' : ''}" href="${adminHref(basePath, 'sessions', 'active')}">Active <b>${context.activeRooms.length}</b></a><a data-admin-nav class="${state === 'past' ? 'active' : ''}" href="${adminHref(basePath, 'sessions', 'past')}">Past <b>${context.pastRooms.length}</b></a></div><span>${result.total} ${state} ${result.total === 1 ? 'session' : 'sessions'}</span></div>
-    ${roomTable(state === 'active' ? 'Active sessions' : 'Past sessions', result.items, snapshot, context.now, state === 'active')}
-    ${pagination(basePath, 'sessions', result.page, result.pages, state)}`;
+function sessionsView(snapshot: AdminDatabaseSnapshot, context: DashboardContext, basePath: string, state: 'active' | 'past') {
+  return `<div class="view-toolbar"><div class="segmented" aria-label="Session status"><a data-admin-nav class="${state === 'active' ? 'active' : ''}" href="${adminHref(basePath, 'sessions', 'active')}">Active <b>${snapshot.counts.activeRooms}</b></a><a data-admin-nav class="${state === 'past' ? 'active' : ''}" href="${adminHref(basePath, 'sessions', 'past')}">Past <b>${snapshot.counts.pastRooms}</b></a></div><span>${snapshot.total} ${state} ${snapshot.total === 1 ? 'session' : 'sessions'}</span></div>
+    ${roomTable(state === 'active' ? 'Active sessions' : 'Past sessions', snapshot.rooms, context.now, state === 'active')}
+    ${pagination(basePath, 'sessions', snapshot.page, snapshot.pages, state)}`;
 }
 
-function participantsView(snapshot: AdminDatabaseSnapshot, context: DashboardContext, basePath: string, requestedPage: number) {
-  const result = paginate(snapshot.participants, requestedPage);
+function participantsView(snapshot: AdminDatabaseSnapshot, context: DashboardContext, basePath: string) {
   return `<section class="panel">
-      <header><div><span class="eyebrow">All rows</span><h2>Participants</h2></div><b>${result.total}</b></header>
+      <header><div><span class="eyebrow">All rows</span><h2>Participants</h2></div><b>${snapshot.total}</b></header>
       <div class="table-wrap"><table><thead><tr><th>Name</th><th>Participant ID</th><th>Room</th><th>Role</th><th>Joined</th><th>Last seen</th><th>Presence</th></tr></thead><tbody>
-        ${result.items.map((participant) => `<tr><td><strong>${escapeHtml(participant.name)}</strong></td><td><code>${escapeHtml(participant.id)}</code></td><td><code>${escapeHtml(participant.roomId)}</code></td><td>${participant.isHost ? 'Host' : 'Guest'}</td><td>${formatDate(participant.joinedAt)}</td><td>${formatRelative(participant.lastSeenAt, context.now)}</td><td>${statusBadge(context.activeRoomIds.has(participant.roomId) && participant.lastSeenAt >= context.now - PARTICIPANT_ACTIVE_MS ? 'active' : 'stale')}</td></tr>`).join('') || emptyRow(7, 'No participant rows stored.')}
+        ${snapshot.participants.map((participant) => `<tr><td><strong>${escapeHtml(participant.name)}</strong></td><td><code>${escapeHtml(participant.id)}</code></td><td><code>${escapeHtml(participant.roomId)}</code></td><td>${participant.isHost ? 'Host' : 'Guest'}</td><td>${formatDate(participant.joinedAt)}</td><td>${formatRelative(participant.lastSeenAt, context.now)}</td><td>${statusBadge(participant.active ? 'active' : 'stale')}</td></tr>`).join('') || emptyRow(7, 'No participant rows stored.')}
       </tbody></table></div>
-    </section>${pagination(basePath, 'participants', result.page, result.pages)}`;
+    </section>${pagination(basePath, 'participants', snapshot.page, snapshot.pages)}`;
 }
 
-function signalsView(snapshot: AdminDatabaseSnapshot, context: DashboardContext, basePath: string, requestedPage: number) {
-  const result = paginate(snapshot.signals, requestedPage);
+function signalsView(snapshot: AdminDatabaseSnapshot, context: DashboardContext, basePath: string) {
   return `<section class="panel">
-      <header><div><span class="eyebrow">Ephemeral mailbox</span><h2>WebRTC signals</h2></div><b>${result.total}</b></header>
+      <header><div><span class="eyebrow">Ephemeral mailbox</span><h2>WebRTC signals</h2></div><b>${snapshot.total}</b></header>
       <p class="note">Signaling payload contents are masked. IDs, routing, kind, size, and retention timestamps are shown.</p>
       <div class="table-wrap"><table><thead><tr><th>ID</th><th>Room</th><th>Sender</th><th>Recipient</th><th>Kind</th><th>Payload</th><th>Created</th><th>Expires</th></tr></thead><tbody>
-        ${result.items.map((signal) => `<tr><td>${signal.id}</td><td><code>${escapeHtml(signal.roomId)}</code></td><td><code>${escapeHtml(signal.senderId)}</code></td><td><code>${escapeHtml(signal.recipientId)}</code></td><td>${escapeHtml(signal.kind)}</td><td>${formatBytes(signal.payloadBytes)}</td><td>${formatDate(signal.createdAt)}</td><td>${formatRelative(signal.expiresAt, context.now)}</td></tr>`).join('') || emptyRow(8, 'No signaling rows stored.')}
+        ${snapshot.signals.map((signal) => `<tr><td>${signal.id}</td><td><code>${escapeHtml(signal.roomId)}</code></td><td><code>${escapeHtml(signal.senderId)}</code></td><td><code>${escapeHtml(signal.recipientId)}</code></td><td>${escapeHtml(signal.kind)}</td><td>${formatBytes(signal.payloadBytes)}</td><td>${formatDate(signal.createdAt)}</td><td>${formatRelative(signal.expiresAt, context.now)}</td></tr>`).join('') || emptyRow(8, 'No signaling rows stored.')}
       </tbody></table></div>
-    </section>${pagination(basePath, 'signals', result.page, result.pages)}`;
+    </section>${pagination(basePath, 'signals', snapshot.page, snapshot.pages)}`;
 }
 
-function roomTable(title: string, roomRows: AdminDatabaseSnapshot['rooms'], snapshot: AdminDatabaseSnapshot, now: number, active: boolean) {
-  const participantCount = new Map<string, number>();
-  const signalCount = new Map<string, number>();
-  for (const participant of snapshot.participants) participantCount.set(participant.roomId, (participantCount.get(participant.roomId) ?? 0) + 1);
-  for (const signal of snapshot.signals) signalCount.set(signal.roomId, (signalCount.get(signal.roomId) ?? 0) + 1);
+function roomTable(title: string, roomRows: AdminDatabaseSnapshot['rooms'], now: number, active: boolean) {
   return `<section class="panel">
     <header><div><span class="eyebrow">${active ? 'Live now' : 'Retained history'}</span><h2>${escapeHtml(title)}</h2></div><b>${roomRows.length}</b></header>
     <div class="table-wrap"><table><thead><tr><th>Room</th><th>Host</th><th>Status</th><th>Protected</th><th>Participants</th><th>Signals</th><th>Created</th><th>Expires / closed</th></tr></thead><tbody>
-      ${roomRows.map((room) => `<tr><td><strong>${escapeHtml(room.id)}</strong></td><td><code>${escapeHtml(room.hostId)}</code></td><td>${statusBadge(active ? 'active' : room.closedAt ? 'closed' : 'expired')}</td><td>${room.protected ? 'Yes' : 'No'}</td><td>${participantCount.get(room.id) ?? 0} / ${room.maxParticipants}</td><td>${signalCount.get(room.id) ?? 0}</td><td>${formatDate(room.createdAt)}</td><td>${room.closedAt ? `Closed ${formatRelative(room.closedAt, now)}` : formatRelative(room.expiresAt, now)}</td></tr>`).join('') || emptyRow(8, active ? 'No active sessions.' : 'No past sessions retained.')}
+      ${roomRows.map((room) => `<tr><td><strong>${escapeHtml(room.id)}</strong></td><td><code>${escapeHtml(room.hostId)}</code></td><td>${statusBadge(active ? 'active' : room.closedAt ? 'closed' : 'expired')}</td><td>${room.protected ? 'Yes' : 'No'}</td><td>${room.participantCount} / ${room.maxParticipants}</td><td>${room.signalCount}</td><td>${formatDate(room.createdAt)}</td><td>${room.closedAt ? `Closed ${formatRelative(room.closedAt, now)}` : formatRelative(room.expiresAt, now)}</td></tr>`).join('') || emptyRow(8, active ? 'No active sessions.' : 'No past sessions retained.')}
     </tbody></table></div>
   </section>`;
-}
-
-function paginate<Item>(items: Item[], requestedPage: number) {
-  const pages = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
-  const page = Math.min(requestedPage, pages);
-  return { items: items.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE), page, pages, total: items.length };
 }
 
 function pagination(basePath: string, view: AdminView, current: number, pages: number, state?: 'active' | 'past') {
@@ -256,6 +255,15 @@ function adminHref(basePath: string, view: AdminView, state?: 'active' | 'past',
 
 function queryValue(value: unknown) {
   return typeof value === 'string' ? value : undefined;
+}
+
+function dashboardQuery(query: Record<string, unknown>): AdminSnapshotQuery {
+  const requestedView = queryValue(query.view);
+  const view: AdminView = requestedView && ['sessions', 'participants', 'signals'].includes(requestedView)
+    ? requestedView as AdminView : 'overview';
+  const state = queryValue(query.state) === 'past' ? 'past' : 'active';
+  const requestedPage = Number.parseInt(queryValue(query.page) ?? '1', 10) || 1;
+  return { view, state, page: Math.min(10_000, Math.max(1, requestedPage)), pageSize: PAGE_SIZE };
 }
 
 function adminAssetPath(basePath: string) {

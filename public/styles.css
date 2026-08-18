@@ -764,6 +764,11 @@ body[data-screen="room"] .site-header { width: min(1440px, calc(100% - 48px)); h
   .streams-panel { min-height: 620px; }
 }
 
+@media (max-width: 760px) {
+  .connection-check-button span { display: none; }
+  .connection-check-button { width: 38px; padding: 0; justify-content: center; }
+}
+
 @media (max-width: 620px) {
   .site-header, .landing, .room-layout, .viewer-layout, .room-experience { width: min(100% - 28px, 1180px); }
   .site-header { height: 72px; }
@@ -800,8 +805,6 @@ body[data-screen="room"] .site-header { width: min(1440px, calc(100% - 48px)); h
   .room-topbar-actions { align-items: flex-end; flex-direction: column; }
   .participant-presence { align-items: flex-end; flex-direction: column; }
   .participant-count { height: auto; }
-  .connection-check-button span { display: none; }
-  .connection-check-button { width: 38px; padding: 0; justify-content: center; }
   .connection-check-panel { width: auto; max-height: calc(100vh - 118px); position: fixed; top: 88px; right: 14px; left: 14px; }
   .room-code-pill { order: 2; }
   .stream-grid, .stream-grid[data-count="5"] { grid-template-columns: 1fr; }

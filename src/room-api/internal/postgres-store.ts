@@ -1,12 +1,12 @@
 import path from 'node:path';
-import { and, desc, eq, exists, gt, gte, isNull, lt, or, sql } from 'drizzle-orm';
+import { and, count, desc, eq, exists, gt, gte, inArray, isNotNull, isNull, lt, lte, or, sql } from 'drizzle-orm';
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { Pool } from 'pg';
 import type { SignalEnvelope, SignalKind } from '../../signaling/index.js';
-import { roomParticipants, rooms, roomSignals } from './schema.js';
+import { requestRateLimits, roomParticipants, rooms, roomSignals } from './schema.js';
 import { withUniqueGuestName } from './guest-name.js';
-import type { JoinStoreResult, RoomStore, StoredParticipant, StoredRoom } from './types.js';
+import type { AdminSnapshotQuery, JoinStoreResult, RateLimitPolicy, RoomStore, StoredParticipant, StoredRoom } from './types.js';
 
 const PARTICIPANT_STALE_MS = 60_000;
 const SIGNAL_TTL_MS = 2 * 60_000;
@@ -16,15 +16,17 @@ type RoomDatabase = NodePgDatabase<{
   rooms: typeof rooms;
   roomParticipants: typeof roomParticipants;
   roomSignals: typeof roomSignals;
+  requestRateLimits: typeof requestRateLimits;
 }>;
 
 export class PostgresRoomStore implements RoomStore {
   private readonly pool: Pool;
   private readonly database: RoomDatabase;
+  private lastRateLimitCleanupAt = 0;
 
   constructor(connectionString: string) {
     this.pool = new Pool({ connectionString: secureConnectionString(connectionString), max: 5, idleTimeoutMillis: 10_000 });
-    this.database = drizzle(this.pool, { schema: { rooms, roomParticipants, roomSignals } });
+    this.database = drizzle(this.pool, { schema: { rooms, roomParticipants, roomSignals, requestRateLimits } });
   }
 
   async migrate() {
@@ -197,14 +199,102 @@ export class PostgresRoomStore implements RoomStore {
     }));
   }
 
-  async adminSnapshot() {
-    const [roomRows, participantRows, signalRows] = await Promise.all([
-      this.database.select().from(rooms).orderBy(desc(rooms.createdAt)),
-      this.database.select().from(roomParticipants).orderBy(desc(roomParticipants.joinedAt)),
-      this.database.select().from(roomSignals).orderBy(desc(roomSignals.createdAt)),
-    ]);
+  async consumeRateLimit(key: string, policy: RateLimitPolicy, now: number) {
+    const current = new Date(now);
+    const nextExpiry = new Date(now + policy.windowMs);
+    if (now - this.lastRateLimitCleanupAt >= RETENTION_MS) {
+      await this.database.delete(requestRateLimits).where(lt(requestRateLimits.expiresAt, new Date(now - RETENTION_MS)));
+      this.lastRateLimitCleanupAt = now;
+    }
+    const [row] = await this.database.insert(requestRateLimits)
+      .values({ key, count: 1, windowStartedAt: current, expiresAt: nextExpiry })
+      .onConflictDoUpdate({
+        target: requestRateLimits.key,
+        set: {
+          count: sql`case when ${requestRateLimits.expiresAt} <= ${current}
+            then 1 else ${requestRateLimits.count} + 1 end`,
+          windowStartedAt: sql`case when ${requestRateLimits.expiresAt} <= ${current}
+            then ${current} else ${requestRateLimits.windowStartedAt} end`,
+          expiresAt: sql`case when ${requestRateLimits.expiresAt} <= ${current}
+            then ${nextExpiry} else ${requestRateLimits.expiresAt} end`,
+        },
+      })
+      .returning({ count: requestRateLimits.count, expiresAt: requestRateLimits.expiresAt });
+    const count = row.count;
+    const expiresAt = row.expiresAt.getTime();
     return {
-      generatedAt: Date.now(),
+      allowed: count <= policy.limit,
+      remaining: Math.max(0, policy.limit - count),
+      retryAfterSeconds: Math.max(1, Math.ceil((expiresAt - now) / 1_000)),
+    };
+  }
+
+  async healthCheck() {
+    await this.database.execute(sql`select 1`);
+  }
+
+  async adminSnapshot(query: AdminSnapshotQuery) {
+    const now = Date.now();
+    const nowDate = new Date(now);
+    const activeRoomsWhere = and(isNull(rooms.closedAt), gt(rooms.expiresAt, nowDate));
+    const pastRoomsWhere = or(isNotNull(rooms.closedAt), lte(rooms.expiresAt, nowDate));
+    const [[storedRooms], [activeRooms], [storedParticipants], [activeParticipants], [storedSignals], [activeSignals]] = await Promise.all([
+      this.database.select({ value: count() }).from(rooms),
+      this.database.select({ value: count() }).from(rooms).where(activeRoomsWhere),
+      this.database.select({ value: count() }).from(roomParticipants),
+      this.database.select({ value: count() }).from(roomParticipants).innerJoin(rooms, eq(rooms.id, roomParticipants.roomId)).where(and(
+        activeRoomsWhere,
+        gte(roomParticipants.lastSeenAt, new Date(now - PARTICIPANT_STALE_MS)),
+      )),
+      this.database.select({ value: count() }).from(roomSignals),
+      this.database.select({ value: count() }).from(roomSignals).where(gt(roomSignals.expiresAt, nowDate)),
+    ]);
+    const counts = {
+      activeRooms: Number(activeRooms.value),
+      pastRooms: Number(storedRooms.value) - Number(activeRooms.value),
+      activeParticipants: Number(activeParticipants.value),
+      storedParticipants: Number(storedParticipants.value),
+      activeSignals: Number(activeSignals.value),
+      storedSignals: Number(storedSignals.value),
+      storedRooms: Number(storedRooms.value),
+    };
+    const total = query.view === 'sessions'
+      ? query.state === 'active' ? counts.activeRooms : counts.pastRooms
+      : query.view === 'participants' ? counts.storedParticipants
+        : query.view === 'signals' ? counts.storedSignals : counts.activeRooms;
+    const pages = Math.max(1, Math.ceil(total / query.pageSize));
+    const page = Math.min(Math.max(1, query.page), pages);
+    const offset = (page - 1) * query.pageSize;
+    const roomRows = query.view === 'overview'
+      ? await this.database.select().from(rooms).where(activeRoomsWhere).orderBy(desc(rooms.createdAt)).limit(5)
+      : query.view === 'sessions'
+        ? await this.database.select().from(rooms)
+          .where(query.state === 'active' ? activeRoomsWhere : pastRoomsWhere)
+          .orderBy(desc(rooms.createdAt)).limit(query.pageSize).offset(offset)
+        : [];
+    const participantRows = query.view === 'participants'
+      ? await this.database.select({ participant: roomParticipants, roomExpiresAt: rooms.expiresAt, roomClosedAt: rooms.closedAt })
+        .from(roomParticipants).innerJoin(rooms, eq(rooms.id, roomParticipants.roomId))
+        .orderBy(desc(roomParticipants.joinedAt)).limit(query.pageSize).offset(offset)
+      : [];
+    const signalRows = query.view === 'signals'
+      ? await this.database.select().from(roomSignals).orderBy(desc(roomSignals.createdAt)).limit(query.pageSize).offset(offset)
+      : [];
+    const roomIds = roomRows.map(({ id }) => id);
+    const [participantCounts, signalCounts] = roomIds.length ? await Promise.all([
+      this.database.select({ roomId: roomParticipants.roomId, value: count() }).from(roomParticipants)
+        .where(inArray(roomParticipants.roomId, roomIds)).groupBy(roomParticipants.roomId),
+      this.database.select({ roomId: roomSignals.roomId, value: count() }).from(roomSignals)
+        .where(inArray(roomSignals.roomId, roomIds)).groupBy(roomSignals.roomId),
+    ]) : [[], []];
+    const participantCountByRoom = new Map(participantCounts.map((row) => [row.roomId, Number(row.value)]));
+    const signalCountByRoom = new Map(signalCounts.map((row) => [row.roomId, Number(row.value)]));
+    return {
+      generatedAt: now,
+      counts,
+      page,
+      pages,
+      total,
       rooms: roomRows.map((room) => ({
         id: room.id,
         hostId: room.hostId,
@@ -213,14 +303,18 @@ export class PostgresRoomStore implements RoomStore {
         createdAt: room.createdAt.getTime(),
         expiresAt: room.expiresAt.getTime(),
         closedAt: room.closedAt?.getTime() ?? null,
+        participantCount: participantCountByRoom.get(room.id) ?? 0,
+        signalCount: signalCountByRoom.get(room.id) ?? 0,
       })),
-      participants: participantRows.map((participant) => ({
+      participants: participantRows.map(({ participant, roomExpiresAt, roomClosedAt }) => ({
         id: participant.id,
         roomId: participant.roomId,
         name: participant.name,
         isHost: participant.isHost,
         joinedAt: participant.joinedAt.getTime(),
         lastSeenAt: participant.lastSeenAt.getTime(),
+        active: roomClosedAt === null && roomExpiresAt.getTime() > now
+          && participant.lastSeenAt.getTime() >= now - PARTICIPANT_STALE_MS,
       })),
       signals: signalRows.map((signal) => ({
         id: signal.id,

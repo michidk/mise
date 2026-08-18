@@ -20,7 +20,7 @@ export interface NativeVideoSettings extends StreamSettings {
 }
 
 /** Capture/encode lifecycle consumed by the room, independent of the codec. */
-export interface MediaEncoder<Settings extends StreamSettings, Frame> {
+export interface MediaEncoder<Settings extends StreamSettings> {
   start(): Promise<void>;
   updateSettings(settings: Settings): void;
   requestKeyframe(): void;

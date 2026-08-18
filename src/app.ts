@@ -1,3 +1,4 @@
+import { buildChatEmoteRenderer, buildRoomNotificationController } from './chat-ui/index.js';
 import {
   createTextPresentation,
   NATIVE_VIDEO_CODEC_ID,
@@ -49,13 +50,6 @@ interface ViewerEntry {
   control: RtcChannel;
   name: string;
   lastMessageAt: number;
-}
-
-interface ChatEmote {
-  name: string;
-  url: string;
-  provider: 'twitch' | 'bttv' | 'ffz' | '7tv';
-  animated: boolean;
 }
 
 type ConnectivityQuality = 'good' | 'fair' | 'poor';
@@ -114,6 +108,8 @@ const joinPasswordInput = $<HTMLInputElement>('#join-password');
 const joinPasswordError = $('#join-password-error');
 const appBaseUrl = new URL(document.baseURI);
 const appBasePath = appBaseUrl.pathname.replace(/\/$/, '');
+const chatEmoteRenderer = buildChatEmoteRenderer(appPath('emotes'));
+const roomNotifications = buildRoomNotificationController($('#notification-toaster'));
 
 const qualityPresets = {
   text: {
@@ -179,7 +175,6 @@ let rtcConfig: RTCConfiguration = {
 };
 let chatAudioContext: AudioContext | undefined;
 let chatSoundsEnabled = readChatSoundsEnabled();
-let cardNotificationsEnabled = readCardNotificationsEnabled();
 let chatCollapsed = readChatCollapsed();
 let toastTimer: ReturnType<typeof setTimeout> | undefined;
 let resolvePasswordPrompt: ((password: string | null) => void) | undefined;
@@ -194,7 +189,6 @@ const mutedPresenters = new Set<string>();
 const participantIds = new Set<string>();
 const participantNames = new Map<string, string>();
 const chatHistory: ChatEntry[] = [];
-const chatEmotes = new Map<string, ChatEmote>();
 const connectivityResults = new Map<string, ConnectivityResult>();
 const pendingConnectivityPings = new Map<string, PendingConnectivityPing>();
 const pendingConnectivityDownloads = new Map<string, PendingConnectivityTransfer>();
@@ -209,35 +203,33 @@ const connectivityProbeChunk = crypto.getRandomValues(new Uint8Array(CONNECTIVIT
 let connectivityRun = 0;
 let connectivityTesting = false;
 
-const configReady = fetch(appPath('config'))
-  .then((response) => response.json())
-  .then((config: { iceServers: RTCIceServer[]; maxParticipants: number }) => {
-    rtcConfig = { iceServers: config.iceServers };
-    maxParticipants = config.maxParticipants;
+const configReady = loadClientConfiguration().catch(() => {});
+
+void chatEmoteRenderer.load()
+  .then(rerenderChatEmotes)
+  .catch(() => {});
+
+function appPath(pathname = ''): string {
+  const suffix = pathname.replace(/^\/+/, '');
+  return `${appBasePath}/${suffix}`;
+}
+
+async function loadClientConfiguration(): Promise<RTCConfiguration> {
+  const response = await fetch(appPath('config'), { cache: 'no-store' });
+  if (!response.ok) throw new Error('Could not load the connection configuration.');
+  const config = await response.json() as { iceServers?: RTCIceServer[]; maxParticipants?: number };
+  if (!Array.isArray(config.iceServers)) throw new Error('The connection configuration is invalid.');
+  rtcConfig = { iceServers: config.iceServers };
+  if (Number.isInteger(config.maxParticipants) && Number(config.maxParticipants) >= 2) {
+    maxParticipants = Number(config.maxParticipants);
     const input = document.querySelector<HTMLInputElement>('#room-limit');
     if (input) {
       input.max = String(maxParticipants);
       input.value = String(Math.min(Number(input.value) || maxParticipants, maxParticipants));
     }
     updateBandwidthEstimate();
-  })
-  .catch(() => {});
-
-void fetch(appPath('emotes'))
-  .then((response) => response.ok ? response.json() : Promise.reject(new Error('Emotes unavailable')))
-  .then((result: { emotes?: unknown }) => {
-    if (!Array.isArray(result.emotes)) return;
-    for (const candidate of result.emotes) {
-      const emote = parseChatEmote(candidate);
-      if (emote) chatEmotes.set(emote.name, emote);
-    }
-    rerenderChatEmotes();
-  })
-  .catch(() => {});
-
-function appPath(pathname = ''): string {
-  const suffix = pathname.replace(/^\/+/, '');
-  return `${appBasePath}/${suffix}` || '/';
+  }
+  return rtcConfig;
 }
 
 function setScreen(screen: 'landing' | 'room') {
@@ -445,6 +437,7 @@ function startNativeMesh(roomSignaling: RestSignalingSession) {
     peerAvailable: routePeer,
     peerClosed: handlePeerClosed,
     mediaTrack: receiveMediaTrack,
+    refreshConfiguration: loadClientConfiguration,
     error: (_, error) => showToast(error.message || 'A peer connection failed.', 'error'),
   });
   roomSignaling.onSignal((signal) => mesh?.handleSignal(signal));
@@ -1098,7 +1091,7 @@ async function runConnectivityChecks() {
   const peerIds = [...participantIds].filter((id) => id !== localId);
   connectivityResults.clear();
   for (const peerId of peerIds) connectivityResults.set(peerId, { status: 'testing' });
-  setConnectivitySummary('testing', peerIds.length ? 'Checking every peer…' : 'No peers to check', peerIds.length
+  setConnectivitySummary(peerIds.length ? 'testing' : 'idle', peerIds.length ? 'Checking every peer…' : 'No peers to check', peerIds.length
     ? 'Measuring ping, transfer speed, packet loss, and connection route.'
     : 'Invite someone to the room, then run the check again.');
   syncConnectivityRunButton();
@@ -1371,7 +1364,8 @@ function waitForConnectivityChannel(channel: RtcChannel) {
       clearTimeout(timer);
       channel.off('open', opened);
       channel.off('close', closed);
-      error ? reject(error) : resolve();
+      if (error) reject(error);
+      else resolve();
     };
     const opened = () => finish();
     const closed = () => finish(new Error('The peer disconnected before the check started.'));
@@ -1781,7 +1775,7 @@ function appendChatActivity(activity: ChatActivity, playSound = true) {
   if (playSound) {
     playChatSound();
     if (activity.activity === 'joined' || activity.activity === 'left') {
-      showRoomNotification({
+      roomNotifications.show({
         kind: activity.activity,
         title: `${activity.author} ${activity.text}`,
         description: 'Room activity',
@@ -1806,7 +1800,7 @@ function appendChatMessage(message: ChatMessage, playSound = true) {
   time.dateTime = new Date(message.sentAt).toISOString();
   time.textContent = new Intl.DateTimeFormat([], { hour: 'numeric', minute: '2-digit' }).format(message.sentAt);
   body.dataset.chatText = message.text;
-  renderChatText(body, message.text);
+  chatEmoteRenderer.render(body, message.text);
   header.append(author, time);
   article.append(header, body);
   container.append(article);
@@ -1814,53 +1808,14 @@ function appendChatMessage(message: ChatMessage, playSound = true) {
   container.scrollTop = container.scrollHeight;
   if (playSound) {
     playChatSound();
-    if (!isOwn) showRoomNotification({ kind: 'message', title: `${message.author} sent a message`, description: message.text });
+    if (!isOwn) roomNotifications.show({ kind: 'message', title: `${message.author} sent a message`, description: message.text });
   }
-}
-
-function renderChatText(container: HTMLElement, text: string) {
-  const content = document.createDocumentFragment();
-  for (const token of text.split(/(\s+)/)) {
-    const emote = chatEmotes.get(token);
-    if (!emote) {
-      content.append(document.createTextNode(token));
-      continue;
-    }
-    const image = document.createElement('img');
-    image.className = 'chat-emote';
-    image.src = emote.url;
-    image.alt = emote.name;
-    image.title = `${emote.name} · ${emote.provider.toUpperCase()}`;
-    image.loading = 'lazy';
-    image.decoding = 'async';
-    image.referrerPolicy = 'no-referrer';
-    content.append(image);
-  }
-  container.replaceChildren(content);
 }
 
 function rerenderChatEmotes() {
   room.querySelectorAll<HTMLElement>('[data-chat-text]').forEach((body) => {
-    renderChatText(body, body.dataset.chatText || '');
+    chatEmoteRenderer.render(body, body.dataset.chatText || '');
   });
-}
-
-function parseChatEmote(value: unknown): ChatEmote | undefined {
-  if (!value || typeof value !== 'object') return undefined;
-  const candidate = value as Partial<ChatEmote>;
-  if (typeof candidate.name !== 'string' || !candidate.name || typeof candidate.url !== 'string'
-    || !['twitch', 'bttv', 'ffz', '7tv'].includes(candidate.provider || '')) return undefined;
-  try {
-    if (new URL(candidate.url).protocol !== 'https:') return undefined;
-  } catch {
-    return undefined;
-  }
-  return {
-    name: candidate.name,
-    url: candidate.url,
-    provider: candidate.provider as ChatEmote['provider'],
-    animated: candidate.animated === true,
-  };
 }
 
 function sendChat(form: HTMLFormElement) {
@@ -1911,59 +1866,9 @@ function initials(name: string) {
   return name.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase();
 }
 
-type RoomNotificationKind = Extract<ActivityKind, 'joined' | 'left'> | 'message';
-
-const notificationIcons: Record<RoomNotificationKind, string> = {
-  message: '<path d="M20 15a3 3 0 0 1-3 3H9l-5 3v-6a3 3 0 0 1-1-2.2V7a3 3 0 0 1 3-3h11a3 3 0 0 1 3 3v8Z"/>',
-  joined: '<path d="M15 20v-1.5c0-2-1.8-3.5-4-3.5s-4 1.5-4 3.5V20M11 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM18 8v6M15 11h6"/>',
-  left: '<path d="M15 20v-1.5c0-2-1.8-3.5-4-3.5s-4 1.5-4 3.5V20M11 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM15 11h6"/>',
-};
-
-function showRoomNotification({ kind, title, description }: { kind: RoomNotificationKind; title: string; description: string }) {
-  if (!cardNotificationsEnabled) return;
-  const toaster = document.querySelector<HTMLElement>('#notification-toaster');
-  if (!toaster) return;
-  const card = document.createElement('article');
-  card.className = 'notification-card';
-  card.dataset.kind = kind;
-  card.innerHTML = `
-    <span class="notification-card-icon"><svg viewBox="0 0 24 24" aria-hidden="true">${notificationIcons[kind]}</svg></span>
-    <div class="notification-card-copy"><strong></strong><p></p></div>
-    <button class="notification-card-close" type="button" aria-label="Dismiss notification"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg></button>`;
-  const titleElement = card.querySelector('strong');
-  const descriptionElement = card.querySelector('p');
-  if (titleElement) titleElement.textContent = title;
-  if (descriptionElement) descriptionElement.textContent = description;
-  const remove = () => {
-    if (!card.isConnected || card.classList.contains('removing')) return;
-    card.classList.add('removing');
-    setTimeout(() => card.remove(), 180);
-  };
-  card.querySelector('button')?.addEventListener('click', remove);
-  toaster.prepend(card);
-  while (toaster.children.length > 4) toaster.lastElementChild?.remove();
-  setTimeout(remove, 5_000);
-}
-
-function readCardNotificationsEnabled() {
-  try { return localStorage.getItem('mise-card-notifications') !== 'off'; } catch { return true; }
-}
-
-function syncCardNotificationButtons() {
-  const action = cardNotificationsEnabled ? 'Turn off popup notifications' : 'Turn on popup notifications';
-  document.querySelectorAll<HTMLButtonElement>('[data-card-notification-toggle]').forEach((button) => {
-    button.setAttribute('aria-pressed', String(cardNotificationsEnabled));
-    button.setAttribute('aria-label', action);
-    button.title = action;
-  });
-}
-
 function toggleCardNotifications() {
-  cardNotificationsEnabled = !cardNotificationsEnabled;
-  try { localStorage.setItem('mise-card-notifications', cardNotificationsEnabled ? 'on' : 'off'); } catch {}
-  syncCardNotificationButtons();
-  if (!cardNotificationsEnabled) $('#notification-toaster').replaceChildren();
-  showToast(cardNotificationsEnabled ? 'Popup notifications enabled.' : 'Popup notifications muted.');
+  const enabled = roomNotifications.toggle();
+  showToast(enabled ? 'Popup notifications enabled.' : 'Popup notifications muted.');
 }
 
 function readChatCollapsed() {
@@ -2154,7 +2059,7 @@ room.querySelector<HTMLFormElement>('[data-chat-form]')?.addEventListener('submi
 
 syncChatSoundButtons();
 document.querySelectorAll('[data-chat-sound-toggle]').forEach((button) => button.addEventListener('click', toggleChatSounds));
-syncCardNotificationButtons();
+roomNotifications.syncButtons();
 document.querySelectorAll('[data-card-notification-toggle]').forEach((button) => button.addEventListener('click', toggleCardNotifications));
 syncChatCollapsed();
 $('#chat-collapse-button').addEventListener('click', () => setChatCollapsed(true));

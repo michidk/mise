@@ -31,6 +31,8 @@ export interface AdminRoomRecord {
   createdAt: number;
   expiresAt: number;
   closedAt: number | null;
+  participantCount: number;
+  signalCount: number;
 }
 
 export interface AdminParticipantRecord {
@@ -40,6 +42,7 @@ export interface AdminParticipantRecord {
   isHost: boolean;
   joinedAt: number;
   lastSeenAt: number;
+  active: boolean;
 }
 
 export interface AdminSignalRecord {
@@ -55,9 +58,39 @@ export interface AdminSignalRecord {
 
 export interface AdminDatabaseSnapshot {
   generatedAt: number;
+  counts: {
+    activeRooms: number;
+    pastRooms: number;
+    activeParticipants: number;
+    storedParticipants: number;
+    activeSignals: number;
+    storedSignals: number;
+    storedRooms: number;
+  };
+  page: number;
+  pages: number;
+  total: number;
   rooms: AdminRoomRecord[];
   participants: AdminParticipantRecord[];
   signals: AdminSignalRecord[];
+}
+
+export interface AdminSnapshotQuery {
+  view: 'overview' | 'sessions' | 'participants' | 'signals';
+  state: 'active' | 'past';
+  page: number;
+  pageSize: number;
+}
+
+export interface RateLimitPolicy {
+  limit: number;
+  windowMs: number;
+}
+
+export interface RateLimitResult {
+  allowed: boolean;
+  remaining: number;
+  retryAfterSeconds: number;
 }
 
 export interface RoomStore {
@@ -77,7 +110,9 @@ export interface RoomStore {
     now: number;
   }): Promise<boolean>;
   readSignals(roomId: string, participantId: string, after: number, now: number): Promise<SignalEnvelope[]>;
-  adminSnapshot(): Promise<AdminDatabaseSnapshot>;
+  consumeRateLimit(key: string, policy: RateLimitPolicy, now: number): Promise<RateLimitResult>;
+  healthCheck(): Promise<void>;
+  adminSnapshot(query: AdminSnapshotQuery): Promise<AdminDatabaseSnapshot>;
   migrate(): Promise<void>;
   close(): Promise<void>;
 }

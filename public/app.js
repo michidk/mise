@@ -1,3 +1,113 @@
+// src/chat-ui/internal/emotes.ts
+function buildChatEmoteRenderer(endpoint) {
+  const emotes = /* @__PURE__ */ new Map();
+  return {
+    async load() {
+      const response = await fetch(endpoint, { headers: { accept: "application/json" } });
+      if (!response.ok) return;
+      const result = await response.json();
+      if (!Array.isArray(result.emotes)) return;
+      for (const candidate of result.emotes) {
+        const emote = parseChatEmote(candidate);
+        if (emote) emotes.set(emote.name, emote);
+      }
+    },
+    render(container, text) {
+      const content = document.createDocumentFragment();
+      for (const token of text.split(/(\s+)/)) {
+        const emote = emotes.get(token);
+        if (!emote) {
+          content.append(document.createTextNode(token));
+          continue;
+        }
+        const image = document.createElement("img");
+        image.className = "chat-emote";
+        image.src = emote.url;
+        image.alt = emote.name;
+        image.title = `${emote.name} \xB7 ${emote.provider.toUpperCase()}`;
+        image.loading = "lazy";
+        image.decoding = "async";
+        image.referrerPolicy = "no-referrer";
+        content.append(image);
+      }
+      container.replaceChildren(content);
+    }
+  };
+}
+function parseChatEmote(value) {
+  if (!value || typeof value !== "object") return void 0;
+  const candidate = value;
+  if (typeof candidate.name !== "string" || !candidate.name || candidate.name.length > 100 || typeof candidate.url !== "string" || !/^\/(?!\/)/.test(candidate.url) || !["twitch", "bttv", "ffz", "7tv"].includes(candidate.provider ?? "")) return void 0;
+  return {
+    name: candidate.name,
+    url: candidate.url,
+    provider: candidate.provider,
+    animated: candidate.animated === true
+  };
+}
+
+// src/chat-ui/internal/notifications.ts
+var notificationIcons = {
+  message: '<path d="M20 15a3 3 0 0 1-3 3H9l-5 3v-6a3 3 0 0 1-1-2.2V7a3 3 0 0 1 3-3h11a3 3 0 0 1 3 3v8Z"/>',
+  joined: '<path d="M15 20v-1.5c0-2-1.8-3.5-4-3.5s-4 1.5-4 3.5V20M11 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM18 8v6M15 11h6"/>',
+  left: '<path d="M15 20v-1.5c0-2-1.8-3.5-4-3.5s-4 1.5-4 3.5V20M11 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM15 11h6"/>'
+};
+function buildRoomNotificationController(root, storage = localStorage) {
+  let enabled = readEnabled(storage);
+  const controller = {
+    get enabled() {
+      return enabled;
+    },
+    show({ kind, title, description }) {
+      if (!enabled) return;
+      const card = document.createElement("article");
+      card.className = "notification-card";
+      card.dataset.kind = kind;
+      card.innerHTML = `
+        <span class="notification-card-icon"><svg viewBox="0 0 24 24" aria-hidden="true">${notificationIcons[kind]}</svg></span>
+        <div class="notification-card-copy"><strong></strong><p></p></div>
+        <button class="notification-card-close" type="button" aria-label="Dismiss notification"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg></button>`;
+      card.querySelector("strong").textContent = title;
+      card.querySelector("p").textContent = description;
+      const remove = () => {
+        if (!card.isConnected || card.classList.contains("removing")) return;
+        card.classList.add("removing");
+        setTimeout(() => card.remove(), 180);
+      };
+      card.querySelector("button")?.addEventListener("click", remove);
+      root.prepend(card);
+      while (root.children.length > 4) root.lastElementChild?.remove();
+      setTimeout(remove, 5e3);
+    },
+    toggle() {
+      enabled = !enabled;
+      try {
+        storage.setItem("mise-card-notifications", enabled ? "on" : "off");
+      } catch {
+      }
+      if (!enabled) root.replaceChildren();
+      controller.syncButtons();
+      return enabled;
+    },
+    syncButtons(selector = "[data-card-notification-toggle]") {
+      const action = enabled ? "Turn off popup notifications" : "Turn on popup notifications";
+      document.querySelectorAll(selector).forEach((button) => {
+        button.setAttribute("aria-pressed", String(enabled));
+        button.setAttribute("aria-label", action);
+        button.title = action;
+      });
+    }
+  };
+  return controller;
+}
+function readEnabled(storage) {
+  try {
+    return storage.getItem("mise-card-notifications") !== "off";
+  } catch {
+    return true;
+  }
+}
+
 // node_modules/fflate/esm/browser.js
 var ch2 = {};
 var wk = (function(c, id, msg, transfer, cb) {
@@ -3341,6 +3451,7 @@ var RtcMesh = class {
     const peer = this.peers.get(peerId2);
     if (!peer) return;
     this.peers.delete(peerId2);
+    clearTimeout(peer.recoveryTimer);
     peer.control.close();
     peer.screen.close();
     peer.diagnostics.close();
@@ -3372,7 +3483,8 @@ var RtcMesh = class {
       makingOffer: false,
       ignoreOffer: false,
       settingRemoteAnswer: false,
-      pendingCandidates: []
+      pendingCandidates: [],
+      recoveryAttempts: 0
     };
     this.peers.set(peerId2, peer);
     this.events.peerAvailable?.(peer);
@@ -3382,7 +3494,21 @@ var RtcMesh = class {
     connection.addEventListener("negotiationneeded", () => void this.negotiate(peer));
     connection.addEventListener("track", (event) => this.events.mediaTrack?.(peerId2, event.track, event.streams));
     connection.addEventListener("connectionstatechange", () => {
-      if (["failed", "closed"].includes(connection.connectionState)) this.closePeer(peerId2);
+      const state = connection.connectionState;
+      this.events.connectionState?.(peerId2, state);
+      if (state === "connected") {
+        peer.recoveryAttempts = 0;
+        clearTimeout(peer.recoveryTimer);
+        peer.recoveryTimer = void 0;
+      } else if (state === "disconnected") {
+        this.scheduleRecovery(peer, 5e3);
+      } else if (state === "failed") {
+        clearTimeout(peer.recoveryTimer);
+        peer.recoveryTimer = void 0;
+        this.scheduleRecovery(peer, 250);
+      } else if (state === "closed") {
+        this.closePeer(peerId2);
+      }
     });
     if (this.audioTrack) void audioSender.replaceTrack(this.audioTrack);
     if (this.videoTrack) void videoSender.replaceTrack(this.videoTrack).then(() => this.applyVideoBitrate(videoSender));
@@ -3410,6 +3536,40 @@ var RtcMesh = class {
       peer.makingOffer = false;
     }
   }
+  scheduleRecovery(peer, delayMs) {
+    if (this.closed || peer.recoveryTimer || !this.peers.has(peer.peerId)) return;
+    if (peer.recoveryAttempts >= 3) {
+      this.events.error?.(peer.peerId, new Error("The peer connection could not be recovered."));
+      this.closePeer(peer.peerId);
+      return;
+    }
+    this.events.connectionState?.(peer.peerId, "recovering");
+    peer.recoveryTimer = setTimeout(() => {
+      peer.recoveryTimer = void 0;
+      void this.recoverPeer(peer);
+    }, delayMs);
+  }
+  async recoverPeer(peer) {
+    if (this.closed || !this.peers.has(peer.peerId) || connectionIsConnected(peer.connection)) return;
+    peer.recoveryAttempts += 1;
+    if (this.events.refreshConfiguration) {
+      try {
+        const refreshed = await this.events.refreshConfiguration();
+        this.configuration = refreshed;
+        peer.connection.setConfiguration(refreshed);
+      } catch (error) {
+        this.events.error?.(peer.peerId, asError(error));
+      }
+    }
+    if (this.closed || !this.peers.has(peer.peerId) || connectionIsConnected(peer.connection)) return;
+    try {
+      peer.connection.restartIce();
+      await this.negotiate(peer);
+    } catch (error) {
+      this.events.error?.(peer.peerId, asError(error));
+    }
+    this.scheduleRecovery(peer, Math.min(8e3, 1e3 * 2 ** peer.recoveryAttempts));
+  }
   async send(recipientId, kind, payload) {
     if (payload !== void 0) await this.sendSignal({ recipientId, kind, payload });
   }
@@ -3417,13 +3577,18 @@ var RtcMesh = class {
 function validPeerId(value) {
   return /^[A-Za-z0-9_-]{8,40}$/.test(value);
 }
+function connectionIsConnected(connection) {
+  return connection.connectionState === "connected";
+}
 function asError(value) {
   return value instanceof Error ? value : new Error(String(value));
 }
 
 // src/signaling/internal/rest-client.ts
 var HEARTBEAT_MS = 2e4;
-var POLL_MS = 800;
+var ACTIVE_POLL_MS = 400;
+var IDLE_POLL_MS = 2500;
+var HIDDEN_POLL_MS = 5e3;
 var SignalingError = class extends Error {
   constructor(code, message, status) {
     super(message);
@@ -3503,7 +3668,8 @@ var RestSignalingSession = class {
     }
   }
   async pollLoop() {
-    let retryMs = POLL_MS;
+    let retryMs = ACTIVE_POLL_MS;
+    let idlePolls = 0;
     while (this.polling) {
       try {
         const batch = await this.request(`/rooms/${this.roomId}/signals?after=${this.cursor}`);
@@ -3511,7 +3677,14 @@ var RestSignalingSession = class {
         for (const signal of batch.signals) {
           for (const listener of this.listeners) await listener(signal);
         }
-        retryMs = batch.signals.length ? 30 : POLL_MS;
+        if (batch.signals.length) {
+          idlePolls = 0;
+          retryMs = 30;
+        } else {
+          idlePolls += 1;
+          retryMs = Math.min(IDLE_POLL_MS, ACTIVE_POLL_MS * 2 ** Math.floor(idlePolls / 4));
+          if (typeof document !== "undefined" && document.visibilityState === "hidden") retryMs = HIDDEN_POLL_MS;
+        }
       } catch (error) {
         if (!this.polling || error instanceof DOMException && error.name === "AbortError") return;
         if (error instanceof SignalingError && [401, 404].includes(error.status)) {
@@ -3519,7 +3692,7 @@ var RestSignalingSession = class {
           for (const listener of this.unavailableListeners) listener();
           return;
         }
-        retryMs = Math.min(5e3, retryMs * 2);
+        retryMs = Math.min(HIDDEN_POLL_MS, retryMs * 2);
       }
       await delay(retryMs, this.abortController.signal).catch(() => {
       });
@@ -3565,6 +3738,10 @@ async function responseError(response) {
 }
 function delay(milliseconds, signal) {
   return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new DOMException("Aborted", "AbortError"));
+      return;
+    }
     const finish = () => {
       signal.removeEventListener("abort", abort);
       resolve();
@@ -3595,6 +3772,8 @@ var joinPasswordInput = $("#join-password");
 var joinPasswordError = $("#join-password-error");
 var appBaseUrl = new URL(document.baseURI);
 var appBasePath = appBaseUrl.pathname.replace(/\/$/, "");
+var chatEmoteRenderer = buildChatEmoteRenderer(appPath("emotes"));
+var roomNotifications = buildRoomNotificationController($("#notification-toaster"));
 var qualityPresets = {
   text: {
     codec: TEXT_CODEC_ID,
@@ -3658,7 +3837,6 @@ var rtcConfig = {
 };
 var chatAudioContext;
 var chatSoundsEnabled = readChatSoundsEnabled();
-var cardNotificationsEnabled = readCardNotificationsEnabled();
 var chatCollapsed = readChatCollapsed();
 var toastTimer;
 var resolvePasswordPrompt;
@@ -3672,7 +3850,6 @@ var mutedPresenters = /* @__PURE__ */ new Set();
 var participantIds = /* @__PURE__ */ new Set();
 var participantNames = /* @__PURE__ */ new Map();
 var chatHistory = [];
-var chatEmotes = /* @__PURE__ */ new Map();
 var connectivityResults = /* @__PURE__ */ new Map();
 var pendingConnectivityPings = /* @__PURE__ */ new Map();
 var pendingConnectivityDownloads = /* @__PURE__ */ new Map();
@@ -3686,29 +3863,30 @@ var CONNECTIVITY_BUFFER_LIMIT = 128 * 1024;
 var connectivityProbeChunk = crypto.getRandomValues(new Uint8Array(CONNECTIVITY_CHUNK_BYTES));
 var connectivityRun = 0;
 var connectivityTesting = false;
-var configReady = fetch(appPath("config")).then((response) => response.json()).then((config) => {
-  rtcConfig = { iceServers: config.iceServers };
-  maxParticipants = config.maxParticipants;
-  const input = document.querySelector("#room-limit");
-  if (input) {
-    input.max = String(maxParticipants);
-    input.value = String(Math.min(Number(input.value) || maxParticipants, maxParticipants));
-  }
-  updateBandwidthEstimate();
-}).catch(() => {
+var configReady = loadClientConfiguration().catch(() => {
 });
-void fetch(appPath("emotes")).then((response) => response.ok ? response.json() : Promise.reject(new Error("Emotes unavailable"))).then((result) => {
-  if (!Array.isArray(result.emotes)) return;
-  for (const candidate of result.emotes) {
-    const emote = parseChatEmote(candidate);
-    if (emote) chatEmotes.set(emote.name, emote);
-  }
-  rerenderChatEmotes();
-}).catch(() => {
+void chatEmoteRenderer.load().then(rerenderChatEmotes).catch(() => {
 });
 function appPath(pathname = "") {
   const suffix = pathname.replace(/^\/+/, "");
-  return `${appBasePath}/${suffix}` || "/";
+  return `${appBasePath}/${suffix}`;
+}
+async function loadClientConfiguration() {
+  const response = await fetch(appPath("config"), { cache: "no-store" });
+  if (!response.ok) throw new Error("Could not load the connection configuration.");
+  const config = await response.json();
+  if (!Array.isArray(config.iceServers)) throw new Error("The connection configuration is invalid.");
+  rtcConfig = { iceServers: config.iceServers };
+  if (Number.isInteger(config.maxParticipants) && Number(config.maxParticipants) >= 2) {
+    maxParticipants = Number(config.maxParticipants);
+    const input = document.querySelector("#room-limit");
+    if (input) {
+      input.max = String(maxParticipants);
+      input.value = String(Math.min(Number(input.value) || maxParticipants, maxParticipants));
+    }
+    updateBandwidthEstimate();
+  }
+  return rtcConfig;
 }
 function setScreen(screen) {
   landing.hidden = screen !== "landing";
@@ -3906,6 +4084,7 @@ function startNativeMesh(roomSignaling) {
     peerAvailable: routePeer,
     peerClosed: handlePeerClosed,
     mediaTrack: receiveMediaTrack,
+    refreshConfiguration: loadClientConfiguration,
     error: (_, error) => showToast(error.message || "A peer connection failed.", "error")
   });
   roomSignaling.onSignal((signal) => mesh?.handleSignal(signal));
@@ -4514,7 +4693,7 @@ async function runConnectivityChecks() {
   const peerIds = [...participantIds].filter((id) => id !== localId);
   connectivityResults.clear();
   for (const peerId2 of peerIds) connectivityResults.set(peerId2, { status: "testing" });
-  setConnectivitySummary("testing", peerIds.length ? "Checking every peer\u2026" : "No peers to check", peerIds.length ? "Measuring ping, transfer speed, packet loss, and connection route." : "Invite someone to the room, then run the check again.");
+  setConnectivitySummary(peerIds.length ? "testing" : "idle", peerIds.length ? "Checking every peer\u2026" : "No peers to check", peerIds.length ? "Measuring ping, transfer speed, packet loss, and connection route." : "Invite someone to the room, then run the check again.");
   syncConnectivityRunButton();
   renderConnectivityResults();
   if (!peerIds.length) {
@@ -4766,7 +4945,8 @@ function waitForConnectivityChannel(channel) {
       clearTimeout(timer);
       channel.off("open", opened);
       channel.off("close", closed);
-      error ? reject(error) : resolve();
+      if (error) reject(error);
+      else resolve();
     };
     const opened = () => finish();
     const closed = () => finish(new Error("The peer disconnected before the check started."));
@@ -5123,7 +5303,7 @@ function appendChatActivity(activity, playSound = true) {
   if (playSound) {
     playChatSound();
     if (activity.activity === "joined" || activity.activity === "left") {
-      showRoomNotification({
+      roomNotifications.show({
         kind: activity.activity,
         title: `${activity.author} ${activity.text}`,
         description: "Room activity"
@@ -5147,7 +5327,7 @@ function appendChatMessage(message, playSound = true) {
   time.dateTime = new Date(message.sentAt).toISOString();
   time.textContent = new Intl.DateTimeFormat([], { hour: "numeric", minute: "2-digit" }).format(message.sentAt);
   body.dataset.chatText = message.text;
-  renderChatText(body, message.text);
+  chatEmoteRenderer.render(body, message.text);
   header.append(author, time);
   article.append(header, body);
   container.append(article);
@@ -5155,49 +5335,13 @@ function appendChatMessage(message, playSound = true) {
   container.scrollTop = container.scrollHeight;
   if (playSound) {
     playChatSound();
-    if (!isOwn) showRoomNotification({ kind: "message", title: `${message.author} sent a message`, description: message.text });
+    if (!isOwn) roomNotifications.show({ kind: "message", title: `${message.author} sent a message`, description: message.text });
   }
-}
-function renderChatText(container, text) {
-  const content = document.createDocumentFragment();
-  for (const token of text.split(/(\s+)/)) {
-    const emote = chatEmotes.get(token);
-    if (!emote) {
-      content.append(document.createTextNode(token));
-      continue;
-    }
-    const image = document.createElement("img");
-    image.className = "chat-emote";
-    image.src = emote.url;
-    image.alt = emote.name;
-    image.title = `${emote.name} \xB7 ${emote.provider.toUpperCase()}`;
-    image.loading = "lazy";
-    image.decoding = "async";
-    image.referrerPolicy = "no-referrer";
-    content.append(image);
-  }
-  container.replaceChildren(content);
 }
 function rerenderChatEmotes() {
   room.querySelectorAll("[data-chat-text]").forEach((body) => {
-    renderChatText(body, body.dataset.chatText || "");
+    chatEmoteRenderer.render(body, body.dataset.chatText || "");
   });
-}
-function parseChatEmote(value) {
-  if (!value || typeof value !== "object") return void 0;
-  const candidate = value;
-  if (typeof candidate.name !== "string" || !candidate.name || typeof candidate.url !== "string" || !["twitch", "bttv", "ffz", "7tv"].includes(candidate.provider || "")) return void 0;
-  try {
-    if (new URL(candidate.url).protocol !== "https:") return void 0;
-  } catch {
-    return void 0;
-  }
-  return {
-    name: candidate.name,
-    url: candidate.url,
-    provider: candidate.provider,
-    animated: candidate.animated === true
-  };
 }
 function sendChat(form) {
   const input = form.querySelector("[data-chat-input]");
@@ -5241,60 +5385,9 @@ function updateElapsedTimes() {
 function initials(name) {
   return name.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase();
 }
-var notificationIcons = {
-  message: '<path d="M20 15a3 3 0 0 1-3 3H9l-5 3v-6a3 3 0 0 1-1-2.2V7a3 3 0 0 1 3-3h11a3 3 0 0 1 3 3v8Z"/>',
-  joined: '<path d="M15 20v-1.5c0-2-1.8-3.5-4-3.5s-4 1.5-4 3.5V20M11 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM18 8v6M15 11h6"/>',
-  left: '<path d="M15 20v-1.5c0-2-1.8-3.5-4-3.5s-4 1.5-4 3.5V20M11 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM15 11h6"/>'
-};
-function showRoomNotification({ kind, title, description }) {
-  if (!cardNotificationsEnabled) return;
-  const toaster = document.querySelector("#notification-toaster");
-  if (!toaster) return;
-  const card = document.createElement("article");
-  card.className = "notification-card";
-  card.dataset.kind = kind;
-  card.innerHTML = `
-    <span class="notification-card-icon"><svg viewBox="0 0 24 24" aria-hidden="true">${notificationIcons[kind]}</svg></span>
-    <div class="notification-card-copy"><strong></strong><p></p></div>
-    <button class="notification-card-close" type="button" aria-label="Dismiss notification"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg></button>`;
-  const titleElement = card.querySelector("strong");
-  const descriptionElement = card.querySelector("p");
-  if (titleElement) titleElement.textContent = title;
-  if (descriptionElement) descriptionElement.textContent = description;
-  const remove = () => {
-    if (!card.isConnected || card.classList.contains("removing")) return;
-    card.classList.add("removing");
-    setTimeout(() => card.remove(), 180);
-  };
-  card.querySelector("button")?.addEventListener("click", remove);
-  toaster.prepend(card);
-  while (toaster.children.length > 4) toaster.lastElementChild?.remove();
-  setTimeout(remove, 5e3);
-}
-function readCardNotificationsEnabled() {
-  try {
-    return localStorage.getItem("mise-card-notifications") !== "off";
-  } catch {
-    return true;
-  }
-}
-function syncCardNotificationButtons() {
-  const action = cardNotificationsEnabled ? "Turn off popup notifications" : "Turn on popup notifications";
-  document.querySelectorAll("[data-card-notification-toggle]").forEach((button) => {
-    button.setAttribute("aria-pressed", String(cardNotificationsEnabled));
-    button.setAttribute("aria-label", action);
-    button.title = action;
-  });
-}
 function toggleCardNotifications() {
-  cardNotificationsEnabled = !cardNotificationsEnabled;
-  try {
-    localStorage.setItem("mise-card-notifications", cardNotificationsEnabled ? "on" : "off");
-  } catch {
-  }
-  syncCardNotificationButtons();
-  if (!cardNotificationsEnabled) $("#notification-toaster").replaceChildren();
-  showToast(cardNotificationsEnabled ? "Popup notifications enabled." : "Popup notifications muted.");
+  const enabled = roomNotifications.toggle();
+  showToast(enabled ? "Popup notifications enabled." : "Popup notifications muted.");
 }
 function readChatCollapsed() {
   try {
@@ -5485,7 +5578,7 @@ room.querySelector("[data-chat-form]")?.addEventListener("submit", (event) => {
 });
 syncChatSoundButtons();
 document.querySelectorAll("[data-chat-sound-toggle]").forEach((button) => button.addEventListener("click", toggleChatSounds));
-syncCardNotificationButtons();
+roomNotifications.syncButtons();
 document.querySelectorAll("[data-card-notification-toggle]").forEach((button) => button.addEventListener("click", toggleCardNotifications));
 syncChatCollapsed();
 $("#chat-collapse-button").addEventListener("click", () => setChatCollapsed(true));

@@ -73,7 +73,7 @@ const decompress = (data: Uint8Array, expectedBytes: number) => new Promise<Uint
  * static text fidelity over motion; the transport can drop complete frames
  * without corrupting later deltas because the sender periodically keyframes.
  */
-export class LosslessTextEncoder implements MediaEncoder<TextCodecSettings, EncodedTextFrame> {
+export class LosslessTextEncoder implements MediaEncoder<TextCodecSettings> {
   private readonly video = document.createElement('video');
   private readonly canvas = document.createElement('canvas');
   private readonly context: CanvasRenderingContext2D;

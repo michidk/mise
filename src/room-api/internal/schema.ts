@@ -3,7 +3,9 @@ import {
   bigint,
   boolean,
   check,
+  foreignKey,
   index,
+  integer,
   jsonb,
   pgTable,
   primaryKey,
@@ -52,4 +54,23 @@ export const roomSignals = pgTable('room_signals', {
 }, (table) => [
   check('room_signals_kind_check', sql`${table.kind} in ('description', 'candidate')`),
   index('room_signals_recipient_idx').on(table.roomId, table.recipientId, table.id),
+  foreignKey({
+    name: 'room_signals_sender_fk',
+    columns: [table.roomId, table.senderId],
+    foreignColumns: [roomParticipants.roomId, roomParticipants.id],
+  }).onDelete('cascade'),
+  foreignKey({
+    name: 'room_signals_recipient_fk',
+    columns: [table.roomId, table.recipientId],
+    foreignColumns: [roomParticipants.roomId, roomParticipants.id],
+  }).onDelete('cascade'),
+]);
+
+export const requestRateLimits = pgTable('request_rate_limits', {
+  key: text('key').primaryKey(),
+  count: integer('count').notNull(),
+  windowStartedAt: timestampColumn('window_started_at').notNull(),
+  expiresAt: timestampColumn('expires_at').notNull(),
+}, (table) => [
+  index('request_rate_limits_expiry_idx').on(table.expiresAt),
 ]);

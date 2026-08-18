@@ -10,6 +10,8 @@ interface PeerState extends RtcPeerChannels {
   ignoreOffer: boolean;
   settingRemoteAnswer: boolean;
   pendingCandidates: RTCIceCandidateInit[];
+  recoveryAttempts: number;
+  recoveryTimer?: ReturnType<typeof setTimeout>;
 }
 
 export class RtcMesh {
@@ -21,7 +23,7 @@ export class RtcMesh {
 
   constructor(
     private readonly localPeerId: string,
-    private readonly configuration: RTCConfiguration,
+    private configuration: RTCConfiguration,
     private readonly sendSignal: (signal: OutgoingSignal) => Promise<void>,
     private readonly events: Partial<RtcMeshEvents> = {},
   ) {}
@@ -137,6 +139,7 @@ export class RtcMesh {
     const peer = this.peers.get(peerId);
     if (!peer) return;
     this.peers.delete(peerId);
+    clearTimeout(peer.recoveryTimer);
     peer.control.close();
     peer.screen.close();
     peer.diagnostics.close();
@@ -171,6 +174,7 @@ export class RtcMesh {
       ignoreOffer: false,
       settingRemoteAnswer: false,
       pendingCandidates: [],
+      recoveryAttempts: 0,
     };
     this.peers.set(peerId, peer);
     this.events.peerAvailable?.(peer);
@@ -180,7 +184,21 @@ export class RtcMesh {
     connection.addEventListener('negotiationneeded', () => void this.negotiate(peer));
     connection.addEventListener('track', (event) => this.events.mediaTrack?.(peerId, event.track, event.streams));
     connection.addEventListener('connectionstatechange', () => {
-      if (['failed', 'closed'].includes(connection.connectionState)) this.closePeer(peerId);
+      const state = connection.connectionState;
+      this.events.connectionState?.(peerId, state);
+      if (state === 'connected') {
+        peer.recoveryAttempts = 0;
+        clearTimeout(peer.recoveryTimer);
+        peer.recoveryTimer = undefined;
+      } else if (state === 'disconnected') {
+        this.scheduleRecovery(peer, 5_000);
+      } else if (state === 'failed') {
+        clearTimeout(peer.recoveryTimer);
+        peer.recoveryTimer = undefined;
+        this.scheduleRecovery(peer, 250);
+      } else if (state === 'closed') {
+        this.closePeer(peerId);
+      }
     });
     if (this.audioTrack) void audioSender.replaceTrack(this.audioTrack);
     if (this.videoTrack) void videoSender.replaceTrack(this.videoTrack).then(() => this.applyVideoBitrate(videoSender));
@@ -208,6 +226,42 @@ export class RtcMesh {
     }
   }
 
+  private scheduleRecovery(peer: PeerState, delayMs: number) {
+    if (this.closed || peer.recoveryTimer || !this.peers.has(peer.peerId)) return;
+    if (peer.recoveryAttempts >= 3) {
+      this.events.error?.(peer.peerId, new Error('The peer connection could not be recovered.'));
+      this.closePeer(peer.peerId);
+      return;
+    }
+    this.events.connectionState?.(peer.peerId, 'recovering');
+    peer.recoveryTimer = setTimeout(() => {
+      peer.recoveryTimer = undefined;
+      void this.recoverPeer(peer);
+    }, delayMs);
+  }
+
+  private async recoverPeer(peer: PeerState) {
+    if (this.closed || !this.peers.has(peer.peerId) || connectionIsConnected(peer.connection)) return;
+    peer.recoveryAttempts += 1;
+    if (this.events.refreshConfiguration) {
+      try {
+        const refreshed = await this.events.refreshConfiguration();
+        this.configuration = refreshed;
+        peer.connection.setConfiguration(refreshed);
+      } catch (error) {
+        this.events.error?.(peer.peerId, asError(error));
+      }
+    }
+    if (this.closed || !this.peers.has(peer.peerId) || connectionIsConnected(peer.connection)) return;
+    try {
+      peer.connection.restartIce();
+      await this.negotiate(peer);
+    } catch (error) {
+      this.events.error?.(peer.peerId, asError(error));
+    }
+    this.scheduleRecovery(peer, Math.min(8_000, 1_000 * 2 ** peer.recoveryAttempts));
+  }
+
   private async send(recipientId: string, kind: OutgoingSignal['kind'], payload: unknown) {
     if (payload !== undefined) await this.sendSignal({ recipientId, kind, payload });
   }
@@ -215,6 +269,10 @@ export class RtcMesh {
 
 function validPeerId(value: string) {
   return /^[A-Za-z0-9_-]{8,40}$/.test(value);
+}
+
+function connectionIsConnected(connection: RTCPeerConnection) {
+  return connection.connectionState === 'connected';
 }
 
 function asError(value: unknown) {

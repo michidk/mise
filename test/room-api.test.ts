@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { guestIdentity } from '../src/room/index.js';
 import { withUniqueGuestName } from '../src/room-api/internal/guest-name.js';
-import { RoomService } from '../src/room-api/internal/service.js';
+import { RoomApiError, RoomService } from '../src/room-api/internal/service.js';
 import type { RoomStore, StoredParticipant } from '../src/room-api/internal/types.js';
 
 test('guest name allocation resolves collisions beyond full room capacity', () => {
@@ -42,6 +42,27 @@ test('signaling storage derives routing identity from the authenticated request'
     payload: { candidate: 'candidate:1' },
     now: 1_000,
   });
+});
+
+test('rate limits hash client identities and return a retry interval', async () => {
+  let storedKey = '';
+  const store = {
+    consumeRateLimit: async (key: string) => {
+      storedKey = key;
+      return { allowed: false, remaining: 0, retryAfterSeconds: 37 };
+    },
+  } as unknown as RoomStore;
+  const service = new RoomService(store, 12, () => 1_000);
+
+  await assert.rejects(
+    () => service.enforceRateLimit('room-create', '203.0.113.42', { limit: 1, windowMs: 60_000 }),
+    (error) => error instanceof RoomApiError
+      && error.status === 429
+      && error.code === 'rate-limited'
+      && error.retryAfterSeconds === 37,
+  );
+  assert.match(storedKey, /^[a-f0-9]{64}$/);
+  assert.doesNotMatch(storedKey, /203\.0\.113\.42/);
 });
 
 function storedParticipant(id: string, name: string): StoredParticipant {

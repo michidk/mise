@@ -8,7 +8,9 @@ import type {
 } from '../types.js';
 
 const HEARTBEAT_MS = 20_000;
-const POLL_MS = 800;
+const ACTIVE_POLL_MS = 400;
+const IDLE_POLL_MS = 2_500;
+const HIDDEN_POLL_MS = 5_000;
 
 export class SignalingError extends Error {
   constructor(readonly code: string, message: string, readonly status: number) {
@@ -97,7 +99,8 @@ export class RestSignalingSession {
   }
 
   private async pollLoop() {
-    let retryMs = POLL_MS;
+    let retryMs = ACTIVE_POLL_MS;
+    let idlePolls = 0;
     while (this.polling) {
       try {
         const batch = await this.request<SignalBatch>(`/rooms/${this.roomId}/signals?after=${this.cursor}`);
@@ -105,7 +108,14 @@ export class RestSignalingSession {
         for (const signal of batch.signals) {
           for (const listener of this.listeners) await listener(signal);
         }
-        retryMs = batch.signals.length ? 30 : POLL_MS;
+        if (batch.signals.length) {
+          idlePolls = 0;
+          retryMs = 30;
+        } else {
+          idlePolls += 1;
+          retryMs = Math.min(IDLE_POLL_MS, ACTIVE_POLL_MS * 2 ** Math.floor(idlePolls / 4));
+          if (typeof document !== 'undefined' && document.visibilityState === 'hidden') retryMs = HIDDEN_POLL_MS;
+        }
       } catch (error) {
         if (!this.polling || error instanceof DOMException && error.name === 'AbortError') return;
         if (error instanceof SignalingError && [401, 404].includes(error.status)) {
@@ -113,7 +123,7 @@ export class RestSignalingSession {
           for (const listener of this.unavailableListeners) listener();
           return;
         }
-        retryMs = Math.min(5_000, retryMs * 2);
+        retryMs = Math.min(HIDDEN_POLL_MS, retryMs * 2);
       }
       await delay(retryMs, this.abortController.signal).catch(() => {});
     }
@@ -164,6 +174,10 @@ async function responseError(response: Response) {
 
 function delay(milliseconds: number, signal: AbortSignal) {
   return new Promise<void>((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new DOMException('Aborted', 'AbortError'));
+      return;
+    }
     const finish = () => {
       signal.removeEventListener('abort', abort);
       resolve();

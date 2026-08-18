@@ -13,10 +13,13 @@ export function buildRoomRouter(service: RoomService) {
   }));
 
   router.post('/', route(async (request, response) => {
+    await service.enforceRateLimit('room-create', clientIdentity(request), { limit: 60, windowMs: 60_000 });
     response.status(201).json(await service.createRoom((request.body ?? {}) as CreateRoomRequest));
   }));
   router.post('/:roomId/join', route(async (request, response) => {
-    response.status(201).json(await service.joinRoom(roomId(request), (request.body ?? {}) as JoinRoomRequest));
+    const id = roomId(request);
+    await service.enforceRateLimit(`room-join:${id}`, clientIdentity(request), { limit: 20, windowMs: 5 * 60_000 });
+    response.status(201).json(await service.joinRoom(id, (request.body ?? {}) as JoinRoomRequest));
   }));
   router.post('/:roomId/heartbeat', route(async (request, response) => {
     const identity = requireIdentity(request);
@@ -35,12 +38,13 @@ export function buildRoomRouter(service: RoomService) {
   }));
   router.post('/:roomId/signals', route(async (request, response) => {
     const identity = requireIdentity(request);
-    await service.sendSignal(roomId(request), identity.participantId, identity.token, (request.body ?? {}) as OutgoingSignal);
+    await service.enforceRateLimit('signal-send', `${clientIdentity(request)}:${identity.participantId}`, { limit: 600, windowMs: 60_000 });
+    await service.sendSignal(roomId(request), identity.participantId, identity.token, outgoingSignal(request.body));
     response.status(202).end();
   }));
   router.get('/:roomId/signals', route(async (request, response) => {
     const identity = requireIdentity(request);
-    const after = Math.max(0, Number.parseInt(String(request.query.after ?? '0'), 10) || 0);
+    const after = signalCursor(request.query.after);
     response.set('Cache-Control', 'private, no-store');
     response.json(await service.readSignals(roomId(request), identity.participantId, identity.token, after));
   }));
@@ -55,9 +59,38 @@ function requireIdentity(request: Request) {
   return { participantId, token };
 }
 
+function clientIdentity(request: Request) {
+  return request.ip || request.socket.remoteAddress || 'unknown';
+}
+
 function roomId(request: Request) {
   const value = request.params.roomId;
-  return Array.isArray(value) ? value[0] ?? '' : value;
+  const id = Array.isArray(value) ? value[0] ?? '' : value;
+  if (!/^[a-z2-9]{4}-[a-z2-9]{4}$/.test(id)) throw new RoomApiError('room-unavailable', 404, 'This room is no longer available.');
+  return id;
+}
+
+function outgoingSignal(value: unknown): OutgoingSignal {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new RoomApiError('invalid-signal', 400, 'The signaling message is invalid.');
+  }
+  const signal = value as Record<string, unknown>;
+  if (typeof signal.recipientId !== 'string' || (signal.kind !== 'description' && signal.kind !== 'candidate')
+    || signal.payload === undefined) {
+    throw new RoomApiError('invalid-signal', 400, 'The signaling message is invalid.');
+  }
+  return {
+    recipientId: signal.recipientId,
+    kind: signal.kind,
+    payload: signal.payload,
+  };
+}
+
+function signalCursor(value: unknown) {
+  if (value === undefined) return 0;
+  const cursor = Number(value);
+  if (!Number.isSafeInteger(cursor) || cursor < 0) throw new RoomApiError('invalid-cursor', 400, 'The signaling cursor is invalid.');
+  return cursor;
 }
 
 function route(handler: RequestHandler): RequestHandler {
@@ -66,6 +99,7 @@ function route(handler: RequestHandler): RequestHandler {
       await handler(request, response, next);
     } catch (error) {
       if (error instanceof RoomApiError) {
+        if (error.retryAfterSeconds) response.set('Retry-After', String(error.retryAfterSeconds));
         response.status(error.status).json({ error: { code: error.code, message: error.message } });
         return;
       }

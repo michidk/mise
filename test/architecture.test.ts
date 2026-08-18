@@ -4,7 +4,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 
 const sourceRoot = path.resolve(import.meta.dirname, '../src');
-const modules = ['media', 'room', 'room-api', 'rtc', 'signaling'];
+const modules = ['chat-ui', 'emotes', 'ice-config', 'media', 'room', 'room-api', 'rtc', 'signaling'];
 
 test('feature modules expose internals only through their public entrypoints', () => {
   const violations: string[] = [];
@@ -13,7 +13,7 @@ test('feature modules expose internals only through their public entrypoints', (
     const source = readFileSync(filename, 'utf8');
     for (const moduleName of modules) {
       if (relative.startsWith(`${moduleName}${path.sep}`)) continue;
-      const internalImport = new RegExp(`(?:from\\s+|import\\s*\\()(['\"]).*${moduleName}/internal/`);
+      const internalImport = new RegExp(`(?:from\\s+|import\\s*\\()(['"]).*${moduleName}/internal/`);
       if (internalImport.test(source)) violations.push(`${relative} imports ${moduleName}/internal`);
     }
   }

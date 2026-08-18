@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type {
   CreateRoomRequest,
   JoinRoomRequest,
@@ -8,14 +9,14 @@ import type {
 } from '../../signaling/index.js';
 import { guestIdentity } from '../../room/index.js';
 import { passwordHash, randomToken, tokenHash, verifyPassword } from './crypto.js';
-import type { RoomStore, StoredParticipant } from './types.js';
+import type { RateLimitPolicy, RoomStore, StoredParticipant } from './types.js';
 
 const ROOM_CODE_ALPHABET = 'abcdefghijkmnpqrstuvwxyz23456789';
 const ROOM_TTL_MS = 90_000;
 const MAX_PASSWORD_LENGTH = 128;
 
 export class RoomApiError extends Error {
-  constructor(readonly code: string, readonly status: number, message: string) {
+  constructor(readonly code: string, readonly status: number, message: string, readonly retryAfterSeconds?: number) {
     super(message);
   }
 }
@@ -25,6 +26,7 @@ export class RoomService {
     private readonly store: RoomStore,
     private readonly maximumParticipants: number,
     private readonly now: () => number = Date.now,
+    private readonly rateLimiting = true,
   ) {}
 
   async createRoom(input: CreateRoomRequest): Promise<RoomCredentials> {
@@ -125,6 +127,24 @@ export class RoomService {
     await this.requireParticipant(roomId, participantId, token, now);
     const signals = await this.store.readSignals(roomId, participantId, after, now);
     return { signals, cursor: signals.at(-1)?.id ?? after };
+  }
+
+  async enforceRateLimit(scope: string, identity: string, policy: RateLimitPolicy) {
+    const result = await this.checkRateLimit(scope, identity, policy);
+    if (!result.allowed) {
+      throw new RoomApiError('rate-limited', 429, 'Too many requests. Try again shortly.', result.retryAfterSeconds);
+    }
+    return result;
+  }
+
+  async checkRateLimit(scope: string, identity: string, policy: RateLimitPolicy) {
+    if (!this.rateLimiting) return { allowed: true, remaining: policy.limit, retryAfterSeconds: 0 };
+    const key = createHash('sha256').update(`${scope}\0${identity}`).digest('hex');
+    return this.store.consumeRateLimit(key, policy, this.now());
+  }
+
+  healthCheck() {
+    return this.store.healthCheck();
   }
 
   private async requireParticipant(roomId: string, participantId: string, token: string, now: number) {

@@ -41,6 +41,9 @@ before(async () => {
     env: {
       ...process.env,
       ADMIN_PASSWORD: '123',
+      ADMIN_SESSION_SECRET: 'test-admin-session-secret-with-enough-entropy',
+      EMOTES_ENABLED: 'false',
+      RATE_LIMIT_ENABLED: 'false',
       PORT: String(port),
       STUN_URLS: 'turn:relay.invalid:3478, stun:main.lohr.dev:3478, stun:stun.l.google.com:19302',
     },
@@ -64,19 +67,80 @@ test('refuses to start without a PostgreSQL connection', () => {
   assert.match(result.stderr, /DATABASE_URL is required for room signaling/);
 });
 
-test('requires an explicit admin password on Vercel', () => {
+test('requires an explicit admin password', () => {
   const { ADMIN_PASSWORD: _, ...env } = process.env;
   const result = spawnSync(process.execPath, ['--import', 'tsx', 'server.ts'], {
     cwd: new URL('..', import.meta.url),
-    env: { ...env, VERCEL: '1' },
+    env: { ...env, ADMIN_SESSION_SECRET: 'test-admin-session-secret-with-enough-entropy' },
     encoding: 'utf8',
   });
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /ADMIN_PASSWORD is required on Vercel/);
+  assert.match(result.stderr, /ADMIN_PASSWORD is required/);
+});
+
+test('requires an independent admin session secret', () => {
+  const { ADMIN_SESSION_SECRET: _, ...env } = process.env;
+  const result = spawnSync(process.execPath, ['--import', 'tsx', 'server.ts'], {
+    cwd: new URL('..', import.meta.url),
+    env: { ...env, ADMIN_PASSWORD: 'test-password' },
+    encoding: 'utf8',
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /ADMIN_SESSION_SECRET is required/);
+});
+
+test('rejects an undersized admin session secret', () => {
+  const result = spawnSync(process.execPath, ['--import', 'tsx', 'server.ts'], {
+    cwd: new URL('..', import.meta.url),
+    env: { ...process.env, ADMIN_PASSWORD: 'test-password', ADMIN_SESSION_SECRET: 'too-short' },
+    encoding: 'utf8',
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /ADMIN_SESSION_SECRET must contain at least 32 bytes/);
+});
+
+test('applies shared API rate limits with a retry interval', async () => {
+  const port = await getAvailablePort();
+  const rateLimitedApp = spawn(process.execPath, ['--import', 'tsx', 'server.ts'], {
+    cwd: new URL('..', import.meta.url),
+    env: {
+      ...process.env,
+      ADMIN_PASSWORD: 'rate-limit-test-password',
+      ADMIN_SESSION_SECRET: 'rate-limit-test-session-secret-with-enough-entropy',
+      EMOTES_ENABLED: 'false',
+      PORT: String(port),
+      RATE_LIMIT_ENABLED: 'true',
+      TRUST_PROXY: 'true',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  await waitForOutput(rateLimitedApp.stdout, 'mise is ready');
+  const identity = `2001:db8:${Date.now().toString(16).slice(-4)}:${Math.floor(Math.random() * 65_535).toString(16)}::1`;
+  try {
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      const response = await fetch(`http://127.0.0.1:${port}/api/rooms`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': identity },
+        body: JSON.stringify({ maxParticipants: 99 }),
+      });
+      assert.equal(response.status, 400);
+    }
+    const blocked = await fetch(`http://127.0.0.1:${port}/api/rooms`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': identity },
+      body: JSON.stringify({ maxParticipants: 99 }),
+    });
+    assert.equal(blocked.status, 429);
+    assert.match(blocked.headers.get('retry-after'), /^\d+$/);
+    assert.equal((await blocked.json()).error.code, 'rate-limited');
+  } finally {
+    rateLimitedApp.kill('SIGTERM');
+  }
 });
 
 test('serves the app and public client configuration', async () => {
   const health = await fetch(`${baseUrl}/health`).then((response) => response.json());
+  const liveness = await fetch(`${baseUrl}/health/live`);
   const configResponse = await fetch(`${baseUrl}/config`);
   const config = await configResponse.json();
   const favicon = await fetch(`${baseUrl}/favicon.svg`);
@@ -86,6 +150,7 @@ test('serves the app and public client configuration', async () => {
   const room = await fetch(`${baseUrl}/room/abc12345`);
 
   assert.deepEqual(health, { ok: true });
+  assert.deepEqual(await liveness.json(), { ok: true });
   assert.equal(config.maxParticipants, 12);
   assert.deepEqual(config.iceServers, [{
     urls: ['stun:main.lohr.dev:3478', 'stun:stun.l.google.com:19302'],
@@ -108,6 +173,8 @@ test('serves the app and public client configuration', async () => {
   assert.match(appClientSource, /text-frame-chunk/);
   assert.match(appClientSource, /text-keyframe-request/);
   assert.equal(landing.status, 200);
+  assert.ok(landing.headers.get('x-request-id'));
+  assert.match(landing.headers.get('content-security-policy'), /img-src 'self' data:/);
   assert.match(await landing.text(), /<base href="\.\/" \/>/);
   assert.equal(room.status, 200);
   const page = await room.text();
@@ -135,7 +202,8 @@ test('serves the app and public client configuration', async () => {
   assert.equal((page.match(/data-share-audio/g) || []).length, 1);
   assert.match(page, /id="copy-invite-button"/);
   assert.match(page, /id="copy-room-code"/);
-  assert.match(page, /Every stream is peer-to-peer encrypted/);
+  assert.match(page, /class="room-privacy"/);
+  assert.match(page, /encrypted between browsers/);
   assert.match(page, /href="https:\/\/github\.com\/michidk\/mise"/);
 });
 
