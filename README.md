@@ -28,7 +28,7 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000). Screen capture works on `localhost`; a deployed instance must use HTTPS.
 
-Local development uses the PostgreSQL service in `compose.yaml`, bound to loopback on port `54329`. `DATABASE_URL` is mandatory in every environment; there is no in-memory fallback. The schema is defined with Drizzle ORM in `src/room-api/internal/schema.ts`, with generated migrations tracked in `drizzle/`.
+Local development uses the PostgreSQL service in `compose.yaml`, bound to loopback on port `54329`. `DATABASE_URL` is mandatory in every environment; there is no in-memory fallback. The schema is defined with Drizzle ORM in `src/room-api/internal/schema.ts`, with generated migrations tracked in `drizzle/`. The server applies pending committed migrations before accepting requests; a PostgreSQL advisory lock serializes concurrent serverless cold starts.
 
 After changing the schema, generate and validate a migration before applying it:
 

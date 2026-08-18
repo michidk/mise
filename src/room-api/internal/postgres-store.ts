@@ -30,7 +30,14 @@ export class PostgresRoomStore implements RoomStore {
   }
 
   async migrate() {
-    await migrate(this.database, { migrationsFolder: path.resolve(process.cwd(), 'drizzle') });
+    const lock = await this.pool.connect();
+    try {
+      await lock.query(`select pg_advisory_lock(hashtext('mise-schema-migrations'))`);
+      await migrate(this.database, { migrationsFolder: path.resolve(process.cwd(), 'drizzle') });
+    } finally {
+      await lock.query(`select pg_advisory_unlock(hashtext('mise-schema-migrations'))`).catch(() => {});
+      lock.release();
+    }
   }
 
   async createRoom(room: StoredRoom, host: StoredParticipant) {

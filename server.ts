@@ -47,6 +47,7 @@ const roomApi = createRoomApi({
   maximumParticipants: MAX_PARTICIPANTS,
   rateLimiting: environmentBoolean('RATE_LIMIT_ENABLED', true),
 });
+await roomApi.migrate();
 
 app.disable('x-powered-by');
 app.use((_, response, next) => {
