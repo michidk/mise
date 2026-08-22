@@ -8,5 +8,7 @@ node_modules/
 .playwright/screenshots/*
 !.playwright/screenshots/mise.png
 coverage/
+public/admin.js
+public/app.js
 .DS_Store
 npm-debug.log*

@@ -37,5 +37,3 @@ jobs:
       - run: npx playwright install --with-deps chromium firefox
       - run: npm audit --omit=dev --audit-level=high
       - run: npm run verify:full
-      - name: Check generated browser bundles
-        run: git diff --exit-code -- public/app.js public/admin.js
