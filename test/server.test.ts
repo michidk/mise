@@ -1,21 +1,42 @@
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcessByStdio } from 'node:child_process';
 import net from 'node:net';
+import type { Readable } from 'node:stream';
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 
-let app;
-let baseUrl;
+type ParticipantIdentity = {
+  participant: { id: string; name: string };
+  participantToken: string;
+};
 
-const getAvailablePort = () => new Promise((resolve, reject) => {
+type RoomRequestInit = RequestInit & { identity?: ParticipantIdentity };
+
+type RoomIdentity = ParticipantIdentity & {
+  hostId: string;
+  participants: Array<{ id: string }>;
+  roomId: string;
+};
+
+type IceServerConfig = { urls: string | string[] };
+
+let app: ChildProcessByStdio<null, Readable, Readable> | undefined;
+let baseUrl: string;
+
+const getAvailablePort = () => new Promise<number>((resolve, reject) => {
   const probe = net.createServer();
   probe.once('error', reject);
   probe.listen(0, '127.0.0.1', () => {
-    const { port } = probe.address();
+    const address = probe.address();
+    if (!address || typeof address === 'string') {
+      reject(new Error('Expected the port probe to use a TCP address'));
+      return;
+    }
+    const { port } = address;
     probe.close(() => resolve(port));
   });
 });
 
-const waitForOutput = (stream, expected) => new Promise((resolve, reject) => {
+const waitForOutput = (stream: Readable, expected: string) => new Promise<void>((resolve, reject) => {
   const timeout = setTimeout(() => reject(new Error(`Timed out waiting for: ${expected}`)), 5_000);
   stream.on('data', (chunk) => {
     if (!chunk.toString().includes(expected)) return;
@@ -24,11 +45,18 @@ const waitForOutput = (stream, expected) => new Promise((resolve, reject) => {
   });
 });
 
-const roomRequest = async (pathname, { identity, ...init } = {}) => {
-  const headers = { 'Content-Type': 'application/json', ...init.headers };
+const requiredHeader = (response: Response, name: string) => {
+  const value = response.headers.get(name);
+  assert.ok(value, `Expected ${name} response header`);
+  return value;
+};
+
+const roomRequest = async (pathname: string, { identity, ...init }: RoomRequestInit = {}) => {
+  const headers = new Headers(init.headers);
+  headers.set('Content-Type', 'application/json');
   if (identity) {
-    headers.Authorization = `Bearer ${identity.participantToken}`;
-    headers['X-Participant-Id'] = identity.participant.id;
+    headers.set('Authorization', `Bearer ${identity.participantToken}`);
+    headers.set('X-Participant-Id', identity.participant.id);
   }
   return fetch(`${baseUrl}/api/rooms${pathname}`, { ...init, headers });
 };
@@ -36,7 +64,7 @@ const roomRequest = async (pathname, { identity, ...init } = {}) => {
 before(async () => {
   const port = await getAvailablePort();
   baseUrl = `http://127.0.0.1:${port}`;
-  app = spawn(process.execPath, ['--import', 'tsx', 'server.ts'], {
+  const startedApp = spawn(process.execPath, ['--import', 'tsx', 'server.ts'], {
     cwd: new URL('..', import.meta.url),
     env: {
       ...process.env,
@@ -49,7 +77,8 @@ before(async () => {
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
-  await waitForOutput(app.stdout, 'mise is ready');
+  app = startedApp;
+  await waitForOutput(startedApp.stdout, 'mise is ready');
 });
 
 after(() => {
@@ -131,7 +160,7 @@ test('applies shared API rate limits with a retry interval', async () => {
       body: JSON.stringify({ maxParticipants: 99 }),
     });
     assert.equal(blocked.status, 429);
-    assert.match(blocked.headers.get('retry-after'), /^\d+$/);
+    assert.match(requiredHeader(blocked, 'retry-after'), /^\d+$/);
     assert.equal((await blocked.json()).error.code, 'rate-limited');
   } finally {
     rateLimitedApp.kill('SIGTERM');
@@ -142,7 +171,7 @@ test('serves the app and public client configuration', async () => {
   const health = await fetch(`${baseUrl}/health`).then((response) => response.json());
   const liveness = await fetch(`${baseUrl}/health/live`);
   const configResponse = await fetch(`${baseUrl}/config`);
-  const config = await configResponse.json();
+  const config = await configResponse.json() as { iceServers: IceServerConfig[]; maxParticipants: number };
   const favicon = await fetch(`${baseUrl}/favicon.svg`);
   const appClient = await fetch(`${baseUrl}/app.js`);
   const appClientSource = await appClient.text();
@@ -158,8 +187,8 @@ test('serves the app and public client configuration', async () => {
   assert.equal('demoTurn' in config, false);
   assert.equal(configResponse.headers.get('cache-control'), 'private, no-store');
   assert.equal(favicon.status, 200);
-  assert.match(favicon.headers.get('content-type'), /image\/svg\+xml/);
-  assert.match(favicon.headers.get('cache-control'), /max-age=0/);
+  assert.match(requiredHeader(favicon, 'content-type'), /image\/svg\+xml/);
+  assert.match(requiredHeader(favicon, 'cache-control'), /max-age=0/);
   assert.ok(config.iceServers.every(({ urls }) => {
     const candidates = Array.isArray(urls) ? urls : [urls];
     return candidates.every((url) => url.startsWith('stun:'));
@@ -174,7 +203,7 @@ test('serves the app and public client configuration', async () => {
   assert.match(appClientSource, /text-keyframe-request/);
   assert.equal(landing.status, 200);
   assert.ok(landing.headers.get('x-request-id'));
-  assert.match(landing.headers.get('content-security-policy'), /img-src 'self' data:/);
+  assert.match(requiredHeader(landing, 'content-security-policy'), /img-src 'self' data:/);
   assert.match(await landing.text(), /<base href="\.\/" \/>/);
   assert.equal(room.status, 200);
   const page = await room.text();
@@ -213,7 +242,7 @@ test('admin dashboard requires its password and renders a redacted database over
   assert.equal(signedOut.status, 200);
   assert.match(signedOutPage, /Admin dashboard/);
   assert.doesNotMatch(signedOutPage, /Database overview/);
-  assert.match(signedOut.headers.get('cache-control'), /no-store/);
+  assert.match(requiredHeader(signedOut, 'cache-control'), /no-store/);
   assert.equal((await fetch(`${baseUrl}/admin/data`)).status, 401);
 
   const rejected = await fetch(`${baseUrl}/admin/login`, {
@@ -230,16 +259,16 @@ test('admin dashboard requires its password and renders a redacted database over
     body: 'password=123',
   });
   assert.equal(accepted.status, 303);
-  const cookie = accepted.headers.get('set-cookie');
+  const cookie = requiredHeader(accepted, 'set-cookie');
   assert.match(cookie, /mise_admin_session=/);
   assert.match(cookie, /HttpOnly/);
   assert.match(cookie, /SameSite=Strict/);
 
-  const seededRooms = [];
+  const seededRooms: RoomIdentity[] = [];
   for (let index = 0; index < 27; index += 1) {
     const created = await roomRequest('', { method: 'POST', body: JSON.stringify({ maxParticipants: 2 }) });
     assert.equal(created.status, 201);
-    seededRooms.push(await created.json());
+    seededRooms.push(await created.json() as RoomIdentity);
   }
   const closedRoom = seededRooms[0];
   const closed = await roomRequest(`/${closedRoom.roomId}`, { identity: closedRoom, method: 'DELETE' });
@@ -257,8 +286,8 @@ test('admin dashboard requires its password and renders a redacted database over
   assert.match(dashboardPage, /Updated automatically with TanStack Query/);
   assert.doesNotMatch(dashboardPage, /Refresh|Read-only access/);
   assert.doesNotMatch(dashboardPage, /password_hash|token_hash/i);
-  assert.match(dashboard.headers.get('content-security-policy'), /default-src 'none'/);
-  assert.match(dashboard.headers.get('content-security-policy'), /script-src 'self'/);
+  assert.match(requiredHeader(dashboard, 'content-security-policy'), /default-src 'none'/);
+  assert.match(requiredHeader(dashboard, 'content-security-policy'), /script-src 'self'/);
 
   const adminClient = await fetch(`${baseUrl}/admin.js`).then((response) => response.text());
   assert.match(adminClient, /admin-view/);
@@ -304,7 +333,7 @@ test('room API enforces passwords and participant limits', async () => {
     body: JSON.stringify({ password: 'correct horse', maxParticipants: 2 }),
   });
   assert.equal(createdResponse.status, 201);
-  const host = await createdResponse.json();
+  const host = await createdResponse.json() as RoomIdentity;
 
   const missingPassword = await roomRequest(`/${host.roomId}/join`, { method: 'POST', body: '{}' });
   assert.equal(missingPassword.status, 401);
@@ -322,7 +351,7 @@ test('room API enforces passwords and participant limits', async () => {
     body: JSON.stringify({ password: 'correct horse' }),
   });
   assert.equal(joinedResponse.status, 201);
-  const viewer = await joinedResponse.json();
+  const viewer = await joinedResponse.json() as RoomIdentity;
   assert.equal(viewer.hostId, host.hostId);
   assert.match(viewer.participant.name, /^Anonymous [A-Z][a-z]+ [A-Z][a-z]+$/);
   assert.deepEqual(viewer.participants.map(({ id }) => id), [host.participant.id]);
