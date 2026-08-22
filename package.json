@@ -22,7 +22,7 @@
     "db:migrate": "node --import tsx scripts/migrate.ts",
     "db:up": "docker compose up -d --wait database",
     "dev": "npm run build:client && node --import tsx --watch server.ts",
-    "lint": "eslint --flag unstable_native_nodejs_ts_config server.ts scripts src test e2e *.ts",
+    "lint": "eslint server.ts scripts src test e2e *.ts *.mjs",
     "start": "npm run build:client && node --import tsx server.ts",
     "pretest": "npm run build && npm run db:migrate",
     "test": "node --import tsx --test",
